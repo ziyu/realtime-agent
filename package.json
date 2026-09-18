@@ -19,6 +19,11 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r --workspace-concurrency=1 run test",
     "test:e2e": "pnpm -r --workspace-concurrency=1 run test:e2e",
-    "test:live": "pnpm --filter @realtime-agent/home run test:live"
+    "test:live": "pnpm --filter @realtime-agent/home run test:live",
+    "test:native": "pnpm --filter @realtime-agent/home run test:native",
+    "test:livekit": "pnpm --filter @realtime-agent/home run test:livekit",
+    "test:voice-api": "pnpm --filter @realtime-agent/home run test:voice-api",
+    "voice:infra:up": "node scripts/livekit-infra.mjs up",
+    "voice:infra:down": "node scripts/livekit-infra.mjs down"
   }
 }

@@ -26,6 +26,7 @@ test('native speech recognition sends recorded audio turns to real Jev and redir
       target.SpeechRecognition = observed; target.webkitSpeechRecognition = observed;
     });
     await page.goto('/');
+    await page.getByRole('combobox', { name: '实时语音方案' }).selectOption('browser');
     await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
     await expect.poll(async () => {
       const alert = await page.getByRole('alert').allTextContents();

@@ -37,7 +37,7 @@ export interface RunningAction {
   elapsed: number;
   path: Vec2[];
 }
-export interface Intent { id: string; text: string; completed: boolean; createdAt: number; replySuppressed?: boolean }
+export interface Intent { id: string; text: string; completed: boolean; createdAt: number; replySuppressed?: boolean; replyChannel?: 'native'; replyDelivered?: boolean }
 export type InputSource = 'text' | 'voice' | 'object';
 export interface MessageInput {
   text: string;
@@ -62,7 +62,7 @@ export interface RealtimeTurn {
 }
 export interface MessageReceipt { ok: true; turnId: string; receivedAt: number; duplicate: boolean }
 export interface Outcome { id: string; action: ActionId; requestId: string | null; at: number; effects: string }
-export interface ChatMessage { id: string; role: 'user' | 'agent' | 'system'; text: string; at: number; initiative?: boolean; turnId?: string }
+export interface ChatMessage { id: string; role: 'user' | 'agent' | 'system'; text: string; at: number; initiative?: boolean; turnId?: string; nativeAudio?: boolean }
 export interface Memory { id: string; text: string; source: 'experience' | 'reflection'; at: number; evidenceIds?: string[]; evidenceText?: string }
 export interface Reflection {
   id: string;
@@ -126,6 +126,7 @@ export interface WorldState {
   agent: { name: string; position: Vec2; needs: Record<Need, number>; action: RunningAction | null };
   intent: Intent | null;
   attending: boolean;
+  nativeVoiceActive: boolean;
   turns: RealtimeTurn[];
   objects: { plantMoisture: number; dishesClean: boolean };
   messages: ChatMessage[];

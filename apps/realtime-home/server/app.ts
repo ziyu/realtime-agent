@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { ACTIONS, isAction } from '../shared/world';
 import type { AgentRuntime } from './runtime';
 import { InputConflict } from './runtime';
+import { VoiceError } from './voice/gateway';
+import type { VoiceGateway } from './voice/gateway';
 
-export function createApp(runtime: AgentRuntime, options: { port?: number } = {}) {
+export function createApp(runtime: AgentRuntime, options: { port?: number; voice?: VoiceGateway } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use('/api', (req, res, next) => {
@@ -22,6 +24,7 @@ export function createApp(runtime: AgentRuntime, options: { port?: number } = {}
     next();
   });
   app.use(express.json({ limit: '8kb' }));
+  if (options.voice) app.use('/api/voice', options.voice.router());
   app.get('/api/health', (_req, res) => res.json({ ok: true, mode: runtime.state.mode }));
   app.get('/api/state', (_req, res) => res.json(runtime.snapshot()));
   app.get('/api/events', (req, res) => {
@@ -41,6 +44,7 @@ export function createApp(runtime: AgentRuntime, options: { port?: number } = {}
     res.on('close', () => { unsubscribe(); clearInterval(heartbeat); });
   });
   app.post('/api/messages', (req, res) => {
+    if (runtime.state.nativeVoiceActive) { res.status(409).json({ error: '正在进行原生语音通话，请从通话页面发送文字，或先结束通话。' }); return; }
     const body = z.object({ text: z.string().trim().min(1).max(1200), source: z.enum(['text', 'voice', 'object']).optional(), epoch: z.uuid().optional(),
       client: z.object({ id: z.uuid(), sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
     }).strict().safeParse(req.body);
@@ -85,6 +89,7 @@ export function createApp(runtime: AgentRuntime, options: { port?: number } = {}
   });
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在。' }));
   const errors: ErrorRequestHandler = (error, _req, res, _next) => {
+    if (error instanceof VoiceError) { res.status(error.status).json({ error: error.message }); return; }
     if (error instanceof InputConflict) { res.status(409).json({ error: error.message }); return; }
     res.status(error?.type === 'entity.too.large' ? 413 : 400).json({ error: error?.type === 'entity.too.large' ? '请求内容过大。' : '请求内容无法解析。' });
   };

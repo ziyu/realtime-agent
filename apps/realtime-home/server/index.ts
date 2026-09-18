@@ -1,4 +1,4 @@
-import { loadRuntimeConfig } from '@realtime-agent/config';
+import { loadRuntimeConfig, loadVoiceConfig } from '@realtime-agent/config';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -7,6 +7,7 @@ import { createApp } from './app';
 import { AgentRuntime } from './runtime';
 import { DemoFastProvider, DemoSlowProvider, JevProvider, LanguageModelProvider } from './providers';
 import { LifeStore } from './life-store';
+import { VoiceGateway } from './voice/gateway';
 
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = loadRuntimeConfig({ appDirectory, defaultPort: 3102 });
@@ -21,7 +22,8 @@ const runtime = new AgentRuntime({
   jevModel: systemOne.model, llmModel: llm.model,
   memories: life.memories, mind: life.mind, persistLife: snapshot => memory.save(snapshot),
 });
-const app = createApp(runtime, { port });
+const voice = new VoiceGateway(runtime, loadVoiceConfig({ appDirectory }));
+const app = createApp(runtime, { port, voice });
 const dist = resolve(appDirectory, 'dist');
 if (existsSync(dist)) {
   app.use(express.static(dist));
@@ -33,5 +35,5 @@ const server = app.listen(port, '127.0.0.1', () => {
 });
 server.on('error', error => { runtime.stop(); console.error(`World server failed: ${error.message}`); process.exitCode = 1; });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
-  runtime.stop(); server.close(); server.closeAllConnections();
+  void voice.dispose(); runtime.stop(); server.close(); server.closeAllConnections();
 });

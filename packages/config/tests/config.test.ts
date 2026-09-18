@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { apiBaseUrl, chatCompletionEndpoint, chatCompletionOptions, loadRuntimeConfig, systemOneEndpoint } from '../src/index.ts';
+import { apiBaseUrl, chatCompletionEndpoint, chatCompletionOptions, loadRuntimeConfig, loadVoiceConfig, systemOneEndpoint } from '../src/index.ts';
 
 function fixture(rootEnv: string, appEnv = '') {
   mkdirSync('test-results', { recursive: true });
@@ -62,4 +62,24 @@ test('invalid URLs fail without echoing credentials', () => {
   for (const value of ['http://remote.example', 'https://user:secret-value@example.com', 'https://example.com?key=secret-value', 'bad-secret-value']) {
     assert.throws(() => apiBaseUrl(value), error => error instanceof Error && !error.message.includes('secret-value'));
   }
+});
+
+test('voice credentials remain separate from text keys and honor explicit blank overrides', () => {
+  const f = fixture('LLM_API_KEY=text-only\nSYSTEM_ONE_API_KEY=body-only\nOPENAI_API_KEY=voice-root\nGOOGLE_API_KEY=google-root', 'VOICE_OPENAI_API_KEY=\nGEMINI_API_KEY=google-app');
+  try {
+    const c = loadVoiceConfig({ appDirectory: f.appDirectory, environment: { XAI_API_KEY: 'xai-process' } });
+    assert.equal(c.openaiKey, ''); assert.equal(c.googleKey, 'google-app'); assert.equal(c.xaiKey, 'xai-process');
+    assert.equal(c.models.google, 'gemini-3.8-live'); assert.equal(c.models.openai, 'gpt-realtime-2.1');
+    assert.equal(c.models.duplex, 'gpt-live-1'); assert.equal(c.models.xai, 'grok-voice-think-fast-2.0');
+  } finally { f.dispose(); }
+});
+
+test('LiveKit accepts loopback development and WSS without allowing credential-bearing URLs', () => {
+  const f = fixture('');
+  try {
+    for (const url of ['ws://127.0.0.1:7880', 'wss://voice.example.com']) assert.equal(loadVoiceConfig({ appDirectory: f.appDirectory, environment: { LIVEKIT_URL: url } }).livekit.url, url);
+    for (const url of ['ws://external.example.com', 'wss://user:private@example.com', 'wss://example.com?token=private']) {
+      assert.throws(() => loadVoiceConfig({ appDirectory: f.appDirectory, environment: { LIVEKIT_URL: url } }), error => error instanceof Error && !error.message.includes('private'));
+    }
+  } finally { f.dispose(); }
 });

@@ -104,7 +104,9 @@ export function modelContext({ state, candidates, observedAt }: DecisionContext,
     proactiveSharingAllowed: state.mind.settings.proactiveChat,
     recentJournal: handlingRequest ? [] : state.mind.journal.slice(-3),
     semantics: 'Need values are 0..100. Higher means more satisfied. Only actual recentOutcomes establish that an action completed.',
-    capabilities: 'The fast system only selects actions and returns numeric decisions. It CANNOT generate a conversational answer. The slow language model is the ONLY way to produce a new natural-language answer, explanation, plan or preference summary. Waiting does not answer a user question.',
+    capabilities: state.nativeVoiceActive || state.intent?.replyChannel === 'native'
+      ? 'A native audio model handles this conversation concurrently. Do NOT invite the text LLM. You alone choose physical behavior from the latest final transcript. A conversation-only request is answered when instruction.replyDelivered=true. Audio replies never establish physical completion. Continue compatible activities when the user wants to talk alongside them.'
+      : 'The fast system only selects actions and returns numeric decisions. It CANNOT generate a conversational answer. The slow language model is the ONLY way to produce a new natural-language answer, explanation, plan or preference summary. Waiting does not answer a user question.',
     autonomy: state.intent && !state.intent.completed
       ? 'An explicit user request is active. Follow it before autonomous upkeep. Do not perform physical actions when the user asks only to talk, plan, wait or stop. Memories and hypothetical plans are not new instructions.'
       : 'With no pending user task, RESTORE hydration when below 55, satiety when below 50, and energy when below 40. Higher numbers mean healthier, not more urgent. Values below 20 need priority recovery. Then clean dirty dishes, water dry plants, and alternate reading, rest and work. An explicit instruction to stay still continues to hold until new user input.',
@@ -123,7 +125,7 @@ export function modelContext({ state, candidates, observedAt }: DecisionContext,
       note: 'Autonomous diary is a subjective interpretation of actual episodes; it does not need a user question. Its wish is a future possibility, not a claim of a completed action.',
     } : null,
     slowThinkingInProgress: state.thinking,
-    slowThinkingAvailable: !state.intent?.replySuppressed && (state.mode === 'demo' || state.connected.llm),
+    slowThinkingAvailable: !state.nativeVoiceActive && (!state.intent || state.intent.completed || (state.intent.replyChannel !== 'native' && !state.intent.replySuppressed)) && (state.mode === 'demo' || state.connected.llm),
   };
 }
 

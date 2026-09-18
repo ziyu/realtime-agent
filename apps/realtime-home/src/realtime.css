@@ -13,3 +13,12 @@
 .turn-metrics small { display: block; margin-top: 8px; line-height: 1.7; color: #93a186; }
 .message-turn-note { display: block; margin-top: 5px; text-align: right; font-size: 9px; color: #8b9680; }
 @media (max-width: 720px) { .conversation-column { height: 800px; } .realtime-toggle { font-size: 12px; } .voice-caption { font-size: 11px; } }
+.voice-profile-label{display:flex;flex-direction:column;gap:6px;font-size:11px;color:#597749;margin-bottom:9px}
+.voice-profile-label select{width:100%;min-width:0;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:8px;font:inherit}
+.voice-provider-note{display:flex;flex-wrap:wrap;gap:5px 10px;font-size:10px;color:#7a896d;margin-bottom:10px;overflow-wrap:anywhere}
+.voice-provider-note code{font-size:9px}.voice-setup{font-size:10px;color:#7e8c70;margin-top:8px;line-height:1.8}.voice-setup summary{cursor:pointer}.voice-setup p{margin-top:5px}.voice-setup code{display:inline-block;font-size:9px;padding:0 3px;overflow-wrap:anywhere}.voice-setup button{font-size:10px;text-decoration:underline;padding:6px 0;color:#315d48}
+.native-voice-output{font-size:11px;line-height:1.8;margin-top:8px;max-height:90px;overflow:auto;overflow-wrap:anywhere;color:#557047}
+.realtime-controls{flex-shrink:0;max-height:330px;overflow:auto}.conversation-column{min-height:760px}
+@media(max-width:720px){.conversation-column{height:860px;min-height:0}.voice-caption{font-size:11px}.voice-setup{font-size:11px}.voice-profile-label{font-size:12px}}
+.conversation-column:has(#panel-chat){height:auto;max-height:none;min-height:0}
+.conversation-column #panel-chat{flex:0 0 auto;height:320px;min-height:240px}

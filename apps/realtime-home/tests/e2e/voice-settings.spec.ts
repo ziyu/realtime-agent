@@ -1,0 +1,30 @@
+import { expect, test } from '@playwright/test';
+
+test('native provider settings explain missing keys without falling back or losing the chat composer at 390px', async ({ page, request }) => {
+  expect((await (await request.get('/api/health')).json()).mode).toBe('demo');
+  await page.goto('/');
+  const select = page.getByRole('combobox', { name: '实时语音方案' });
+  await expect(select).toBeVisible();
+  await expect(select.locator('option')).toHaveCount(6);
+  await select.selectOption('livekit-duplex');
+  await expect(page.getByTestId('realtime-controls')).toContainText('GPT-Live');
+  await expect(page.getByTestId('realtime-controls')).toContainText('alpha');
+  await select.selectOption('livekit-gemini');
+  await expect(page.getByTestId('realtime-controls')).toContainText('gemini-3.8-live');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const controls = page.getByTestId('realtime-controls');
+  await controls.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await select.boundingBox())!.width).toBeGreaterThan(280);
+  await expect(page.getByRole('textbox', { name: '给 Milo 发消息' })).toBeVisible();
+  await select.selectOption('openai-webrtc');
+  await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(select).toHaveValue('openai-webrtc');
+  await expect(page.getByRole('button', { name: '开始实时对话', exact: true })).toBeVisible();
+  const panelBounds = (await page.getByRole('complementary', { name: '与 Milo 互动' }).boundingBox())!;
+  const sendBounds = (await page.getByRole('button', { name: '发送消息', exact: true }).boundingBox())!;
+  expect(sendBounds.y + sendBounds.height).toBeLessThan(panelBounds.y + panelBounds.height - 10);
+  expect((await page.locator('#panel-chat').boundingBox())!.height).toBeGreaterThanOrEqual(240);
+  await page.screenshot({ path: 'test-results/native-settings-mobile.png', fullPage: true });
+});

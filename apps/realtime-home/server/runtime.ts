@@ -49,6 +49,7 @@ export class AgentRuntime {
   private lastEmit = 0;
   private failures = 0;
   private lastInnerCheckAt = -Infinity;
+  private nativeListening = false;
 
   constructor(private options: Options) {
     this.now = options.now ?? Date.now;
@@ -61,7 +62,7 @@ export class AgentRuntime {
       mode: this.options.mode,
       connected: { jev: this.options.mode === 'live', llm: this.options.mode === 'live' && !!this.options.slow, jevModel: this.options.jevModel ?? 'jev-latest', llmModel: this.options.llmModel ?? '' },
       agent: { name: 'Milo', position: { x: -2.5, z: 1.5 }, needs: { energy: 78, satiety: 64, hydration: 47, happiness: 82 }, action: null },
-      intent: null, attending: false, turns: [], objects: { plantMoisture: 52, dishesClean: true },
+      intent: null, attending: false, nativeVoiceActive: false, turns: [], objects: { plantMoisture: 52, dishesClean: true },
       messages: [{ id: randomUUID(), role: 'agent', text: mind.lifetimeCompleted
         ? `又是新的一刻。${activeGoal(mind) ? `我还惦记着「${activeGoal(mind)!.title}」。` : '之前的小经历和随记还在，我想接着慢慢过。'}`
         : '嗨，我是 Milo。我喜欢安静地看书，也喜欢照顾那盆绿植。你忙你的就好；有意思的事，我们可以慢慢聊。', at: this.now() }],
@@ -73,6 +74,37 @@ export class AgentRuntime {
   }
   snapshot(): WorldState { return structuredClone(this.state); }
   subscribe(listener: (state: WorldState) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  setNativeVoice(active: boolean) {
+    this.cancelRequests();
+    this.nativeListening = false;
+    this.state.nativeVoiceActive = active;
+    this.state.attending = false;
+    if (this.state.intent) this.state.intent.replySuppressed = true;
+    this.state.reflection = null;
+    this.state.version++; this.pendingDecision = true; this.emit();
+  }
+  /** Yield while the microphone turn is unfinished; never execute interim transcripts. */
+  holdNativeInput() {
+    if (!this.state.nativeVoiceActive || this.state.paused) return;
+    this.cancelRequests(); this.nativeListening = true;
+    this.state.attending = true; this.state.version++;
+    if (this.state.intent) this.state.intent.replySuppressed = true;
+    this.emit();
+  }
+  releaseNativeInput() {
+    this.nativeListening = false; this.state.attending = false;
+    this.pendingDecision = true; this.emit(); this.wakeInteraction();
+  }
+  recordNativeReply(turnId: string, text: string) {
+    const intent = this.state.intent;
+    if (!this.state.nativeVoiceActive || !intent || intent.id !== turnId || intent.replySuppressed || this.nativeListening || !text.trim()) return false;
+    this.state.messages.push({ id: randomUUID(), role: 'agent', text: text.slice(0, 2400), at: this.now(), turnId, nativeAudio: true });
+    this.state.messages = this.state.messages.slice(-70);
+    intent.replyDelivered = true;
+    const turn = this.currentTurn(); if (turn) turn.replyAt = this.now();
+    this.pendingDecision = true; this.emit();
+    return true;
+  }
   private refreshScheduler() {
     const s = this.state;
     s.scheduler.nextTickAt = this.decisionTimer && !s.paused ? this.nextTickAt : null;
@@ -191,7 +223,8 @@ export class AgentRuntime {
     if (previous) previous.supersededAt = this.now();
     this.state.intentVersion++; this.state.version++;
     this.lastThoughtAt = -Infinity;
-    this.state.intent = { id: randomUUID(), text: trimmed, completed: false, createdAt: this.now() };
+    this.nativeListening = false;
+    this.state.intent = { id: randomUUID(), text: trimmed, completed: false, createdAt: this.now(), ...(this.state.nativeVoiceActive ? { replyChannel: 'native' as const } : {}) };
     this.state.turns.push({ id: this.state.intent.id, source, receivedAt: this.now(), previousAction: this.state.agent.action?.id ?? null,
       decisionStartedAt: null, decisionAt: null, appliedAt: null, appliedAction: null, replyAt: null, supersededAt: null, replyCancelledAt: null, error: null });
     this.state.turns = this.state.turns.slice(-32);
@@ -244,6 +277,7 @@ export class AgentRuntime {
     this.persistLife(); this.emit(); return true;
   }
   reset() {
+    this.nativeListening = false;
     if (this.inputTimer) clearTimeout(this.inputTimer);
     this.inputTimer = null; this.urgentDecision = false;
     this.cancelRequests(); this.state = this.initialState(this.state.memories, this.state.mind);
@@ -323,7 +357,7 @@ export class AgentRuntime {
 
   async decide(): Promise<void> {
     const now = this.now();
-    if (this.state.paused || this.fastController || now < this.lastDecisionAt + DECISION_INTERVAL_MS || now < this.retryAt) return;
+    if (this.state.paused || this.nativeListening || this.fastController || now < this.lastDecisionAt + DECISION_INTERVAL_MS || now < this.retryAt) return;
     if (this.state.reflection && !this.state.reflection.accepted && now - this.state.reflection.createdAt > 60000) {
       this.state.reflection = null; this.state.version++; this.pendingDecision = true;
       this.trace('guard', '旧想法已过期', '重新观察眼前的生活，过期建议不会一直占着思考的位置。');
@@ -390,7 +424,7 @@ export class AgentRuntime {
       // This is the sole slow-provider entrypoint: only the fast system can request a thought.
       const automatic = !this.state.intent || this.state.intent.completed;
       const automaticReady = this.state.mind.lastAutonomousAttemptAt === null || now - this.state.mind.lastAutonomousAttemptAt >= AUTONOMOUS_THOUGHT_INTERVAL_MS;
-      if (decision.think >= 0.7 && !this.slowController && this.now() - this.lastThoughtAt >= 15000 && (!automatic || automaticReady) && (automatic || !this.state.intent?.replySuppressed)) void this.reflect();
+      if (!this.state.nativeVoiceActive && (automatic || this.state.intent?.replyChannel !== 'native') && decision.think >= 0.7 && !this.slowController && this.now() - this.lastThoughtAt >= 15000 && (!automatic || automaticReady) && (automatic || !this.state.intent?.replySuppressed)) void this.reflect();
       // All candidate actions are reversible household activities. Confidence is diagnostic,
       // not permission to move: several reasonable choices must not paralyze the executor.
       if (decision.requestComplete >= 0.8 && this.state.intent && !this.state.intent.completed && !this.state.agent.action) {

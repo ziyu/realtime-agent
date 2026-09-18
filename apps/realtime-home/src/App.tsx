@@ -8,6 +8,7 @@ import { createHome } from './scene';
 import { sendApi, useWorld } from './useWorld';
 import { MemoryPanel, MindGlance, MindPanel } from './MindPanel';
 import { useVoiceConversation } from './useVoiceConversation';
+import { VoiceControls } from './VoiceControls';
 import './realtime.css';
 
 type Tab = 'chat' | 'mind' | 'thoughts' | 'memories';
@@ -80,7 +81,7 @@ export function App() {
     utterance: text => { void send(text, 'voice'); },
     interrupt: () => interruptReply(),
     error: message => { cancelPlayback(); setError(message); },
-  });
+  }, world);
   const listening = realtimeVoice.active;
   const turn = world?.turns.find(t => t.id === world.intent?.id);
   const action = world?.agent.action;
@@ -98,7 +99,7 @@ export function App() {
   useEffect(() => {
     if (!lastMessage || lastSpoken.current === lastMessage.id) return;
     lastSpoken.current = lastMessage.id;
-    if (voice && connected && !world?.paused && !awaitingDelivery.current && realtimeVoice.status !== 'hearing' && lastMessage.role === 'agent' && (!lastMessage.turnId || !blockedTurns.current.has(lastMessage.turnId)) && 'speechSynthesis' in window) {
+    if (voice && !lastMessage.nativeAudio && !world?.nativeVoiceActive && connected && !world?.paused && !awaitingDelivery.current && realtimeVoice.status !== 'hearing' && lastMessage.role === 'agent' && (!lastMessage.turnId || !blockedTurns.current.has(lastMessage.turnId)) && 'speechSynthesis' in window) {
       const generation = ++playbackGeneration.current;
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(lastMessage.text); utterance.lang = 'zh-CN'; utterance.rate = 1.1;
@@ -119,6 +120,7 @@ export function App() {
   }
   function interruptReply() {
     blockPreviousTurn();
+    if (realtimeVoice.isNative && realtimeVoice.active) { realtimeVoice.interrupt(); return; }
     if (!connected || !world?.intent) return;
     void sendApi('conversation/interrupt', { epoch: world.epoch, turnId: world.intent.id }).catch(() => {
       setError('朗读已停止，但打断消息未送达。请检查连接后再发送新指令。');
@@ -132,6 +134,13 @@ export function App() {
   async function send(text: string, source: InputSource = 'text') {
     const trimmed = text.trim();
     if (!trimmed || !connected || !world) return;
+    if (realtimeVoice.isNative && realtimeVoice.active) {
+      nearBottom.current = true; setTab('chat');
+      if (source === 'text') setDraft(value => value.trim() === trimmed ? '' : value);
+      try { await realtimeVoice.sendText(trimmed); setError(''); }
+      catch (err) { setError(err instanceof Error ? err.message : '实时文字未送达。'); if (source === 'text') setDraft(value => value || trimmed); }
+      return;
+    }
     const current = ++sequence.current;
     const started = performance.now();
     blockPreviousTurn(); awaitingDelivery.current = true;
@@ -159,7 +168,7 @@ export function App() {
   function submit(event: FormEvent) { event.preventDefault(); void send(draft); }
   function startListening() {
     if (listening) { realtimeVoice.stop(); cancelPlayback(); setVoice(false); return; }
-    setError(''); setVoice(true); setTab('chat'); realtimeVoice.start();
+    setError(''); setVoice(!realtimeVoice.isNative); setTab('chat'); realtimeVoice.start();
   }
   function downloadTrace() {
     if (!world) return;
@@ -207,10 +216,7 @@ export function App() {
       <aside className="conversation-column" aria-label="与 Milo 互动">
         <div className="companion-heading"><div className="companion-avatar"><span className="robot-eyes">••</span><span className="antenna" /></div><div><h2>Milo<span className="companion-badge">你的 AI 室友</span></h2><p><span className={`dot ${!connected || world?.paused ? 'muted' : ''}`} />{status}</p></div><button className="icon-button voice-button" aria-pressed={voice} aria-label={voice ? '关闭朗读' : '朗读回复'} title={voice ? '关闭朗读' : '朗读回复（浏览器语音）'} disabled={!('speechSynthesis' in window)} onClick={() => { if (voice) cancelPlayback(); setVoice(!voice); }}>{voice ? <Volume2 size={17} /> : <VolumeX size={17} />}</button></div>
         <div className="tabs" role="tablist" aria-label="互动面板">{([{ id: 'chat', label: '对话', Icon: MessageCircle }, { id: 'mind', label: '内心', Icon: Heart }, { id: 'thoughts', label: '思考', Icon: Brain }, { id: 'memories', label: '记忆', Icon: BookOpen }] as const).map(({ id, label: title, Icon }) => <button id={`tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`panel-${id}`} key={id} onClick={() => { setTab(id); nearBottom.current = true; }}><Icon size={15} />{title}{id === 'memories' && !!world?.memories.length && <span className="tab-count">{world.memories.length}</span>}{id === 'thoughts' && world?.thinking && <span className="dot" />}</button>)}</div>
-        <div className="realtime-controls" data-testid="realtime-controls">
-          <div className="realtime-controls-row"><button type="button" className="realtime-toggle" aria-pressed={listening} disabled={!realtimeVoice.supported || !connected || world?.paused} onClick={startListening}><Mic size={15} />{listening ? '结束实时对话' : '开始实时对话'}</button><button type="button" className="interrupt-reply" disabled={!connected || (!speaking && !world?.thinking && !world?.reflection)} onClick={interruptReply}>打断回复</button></div>
-          <p className="voice-caption" data-testid="voice-caption" aria-live="polite">{realtimeVoice.transcript ? <><strong>正在听：</strong>{realtimeVoice.transcript}</> : listening ? realtimeVoice.status === 'starting' ? '正在连接麦克风…' : realtimeVoice.status === 'reconnecting' ? '正在重新连接语音识别…' : '正在听。说完会自动发送，也可以直接插话。' : realtimeVoice.supported ? '开启后说完自动发送。建议戴耳机，避免朗读被再次识别。' : '此浏览器不支持语音识别，可继续使用文字实时对话。'}</p>
-        </div>
+        <VoiceControls voice={realtimeVoice} connected={connected} paused={world?.paused ?? false} canInterrupt={realtimeVoice.isNative && listening || speaking || Boolean(world?.thinking || world?.reflection)} onToggle={startListening} onInterrupt={interruptReply} />
         {!connected && <div className="connection-note" role="status"><WifiOff size={14} />正在连接家园，恢复后会自动同步…</div>}
         {(error || world?.error) && <div className="error-note" role="alert"><span>{error || world?.error}</span>{error && <button className="icon-button" aria-label="关闭错误提示" onClick={() => setError('')}><X size={14} /></button>}</div>}
 

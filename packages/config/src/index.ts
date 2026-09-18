@@ -59,6 +59,45 @@ export interface RuntimeConfig {
   llm: { apiKey: string; model: string; baseUrl: string };
 }
 
+export interface VoiceConfig {
+  openaiKey: string;
+  googleKey: string;
+  xaiKey: string;
+  livekit: { url: string; apiKey: string; apiSecret: string };
+  models: { openai: string; duplex: string; google: string; xai: string; backend: string };
+}
+
+/** Voice providers have separate credentials; a text-completions key is never reused. */
+export function loadVoiceConfig(options: { appDirectory: string; environment?: Environment }): VoiceConfig {
+  const appDirectory = resolve(options.appDirectory);
+  const layers = [options.environment ?? process.env, readEnvironment(join(appDirectory, '.env')), readEnvironment(join(workspaceRoot(appDirectory), '.env'))];
+  const pick = (...names: string[]) => {
+    for (const layer of layers) for (const name of names) if (layer[name] !== undefined) return layer[name]!.trim();
+    return '';
+  };
+  const url = pick('LIVEKIT_URL');
+  if (url) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new Error('LIVEKIT_URL must be a WebSocket URL.'); }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash || !(parsed.protocol === 'wss:' || (parsed.protocol === 'ws:' && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname)))) {
+      throw new Error('LIVEKIT_URL must use WSS, or WS on loopback, without embedded credentials.');
+    }
+  }
+  return {
+    openaiKey: pick('VOICE_OPENAI_API_KEY', 'OPENAI_API_KEY'),
+    googleKey: pick('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
+    xaiKey: pick('XAI_API_KEY'),
+    livekit: { url, apiKey: pick('LIVEKIT_API_KEY'), apiSecret: pick('LIVEKIT_API_SECRET') },
+    models: {
+      openai: pick('VOICE_OPENAI_MODEL') || 'gpt-realtime-2.1',
+      duplex: pick('VOICE_DUPLEX_MODEL') || 'gpt-live-1',
+      google: pick('VOICE_GEMINI_MODEL') || 'gemini-3.8-live',
+      xai: pick('VOICE_XAI_MODEL') || 'grok-voice-think-fast-2.0',
+      backend: pick('VOICE_DUPLEX_BACKEND_MODEL') || 'gpt-5.6-luna',
+    },
+  };
+}
+
 /** Server-only. Process > app .env > workspace .env, including aliases across layers. Never mutates process.env. */
 export function loadRuntimeConfig(options: { appDirectory: string; defaultPort: number; environment?: Environment }): RuntimeConfig {
   const appDirectory = resolve(options.appDirectory);

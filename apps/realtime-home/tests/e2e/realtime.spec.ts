@@ -78,6 +78,7 @@ test('continuous speech final results auto-send and speech onset cancels the pre
     } });
   });
   await page.goto('/');
+  await page.getByRole('combobox', { name: '实时语音方案' }).selectOption('browser');
   await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
   await expect(page.getByRole('button', { name: '结束实时对话', exact: true })).toBeVisible();
   async function recognize(parts: [string, boolean][]) {

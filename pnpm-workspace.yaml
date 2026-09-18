@@ -8,5 +8,8 @@ packageManagerStrictVersion: true
 
 # Native build steps already used by the existing application toolchains.
 allowBuilds:
+  '@google/genai': false
+  '@livekit/local-inference': false
   esbuild: true
   fsevents: true
+  protobufjs: false
