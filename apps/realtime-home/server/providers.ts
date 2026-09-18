@@ -1,0 +1,335 @@
+import { setTimeout as delay } from 'node:timers/promises';
+import { z } from 'zod';
+import { chatCompletionEndpoint, chatCompletionOptions, systemOneEndpoint } from '@realtime-agent/config';
+import { ACTION_IDS, ACTIONS } from '../shared/world';
+import type { ActionId, Choice, Decision, DecisionContext, FastProvider, ModelReceipt, SlowProvider, ThoughtResult } from '../shared/types';
+import { activeGoal, personalInclinations, recall, reflectionOpportunity, remainingGoalActions } from './mind';
+
+export class ProviderError extends Error {
+  constructor(message: string, public retryAfterMs = 5000, public receipt?: ModelReceipt) { super(message); }
+}
+
+/** Error bodies can echo credentials. Only sanitized status information crosses this boundary. */
+async function requestJson(url: string, key: string, body: unknown, signal: AbortSignal, timeout: number, fetcher: typeof fetch) {
+  const combined = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
+  let response: Response;
+  try {
+    response = await fetcher(url, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: combined, redirect: 'error' });
+  } catch {
+    if (signal.aborted) throw signal.reason;
+    throw new ProviderError(combined.aborted ? '模型请求超时，请检查连接。' : '无法连接模型服务，请检查网络和配置。');
+  }
+  if (!response.ok) {
+    const value = response.headers.get('retry-after');
+    const retry = value ? (/^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()) : 0;
+    void response.body?.cancel().catch(() => undefined);
+    throw new ProviderError(`模型服务返回 HTTP ${response.status}，请检查密钥、模型名称或额度。`, Math.min(60000, Math.max(response.status === 401 ? 30000 : 5000, Number.isFinite(retry) ? retry : 0)));
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new ProviderError('模型返回了空响应。');
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  combined.addEventListener('abort', cancel, { once: true });
+  try {
+    for (;;) {
+      combined.throwIfAborted();
+      const { done, value } = await reader.read();
+      combined.throwIfAborted();
+      if (done) break;
+      total += value.byteLength;
+      if (total > 131072) { cancel(); throw new ProviderError('模型响应过大，已拒绝。'); }
+      chunks.push(value);
+    }
+    const data: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const metadata = z.object({
+      model: z.string().max(160).optional(),
+      id: z.string().max(160).optional(),
+      request_id: z.string().max(160).optional(),
+      usage: z.object({
+        input_tokens: z.number().int().nonnegative().optional(),
+        output_tokens: z.number().int().nonnegative().optional(),
+        prompt_tokens: z.number().int().nonnegative().optional(),
+        completion_tokens: z.number().int().nonnegative().optional(),
+      }).optional(),
+    }).safeParse(data);
+    const receipt: ModelReceipt = { status: response.status, receivedAt: Date.now() };
+    if (metadata.success) {
+      const m = metadata.data;
+      const id = response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? m.request_id ?? m.id;
+      if (m.model && !m.model.includes(key)) receipt.model = m.model;
+      if (id && id.length <= 160 && /^[a-zA-Z0-9_:./-]+$/.test(id) && !id.includes(key)) receipt.requestId = id;
+      receipt.inputTokens = m.usage?.input_tokens ?? m.usage?.prompt_tokens;
+      receipt.outputTokens = m.usage?.output_tokens ?? m.usage?.completion_tokens;
+    }
+    return { data, receipt };
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError(combined.aborted ? '模型响应超时，已取消。' : '模型响应不完整或不是有效 JSON。');
+  } finally { combined.removeEventListener('abort', cancel); reader.releaseLock(); }
+}
+
+const probability = z.number().finite().min(0).max(1);
+const noul = z.object({ type: z.literal('noul'), noul: probability });
+const reviewAnswer = z.object({ type: z.literal('choice'), choice: z.enum(['accept', 'reject']), confidence: probability, probabilities: z.object({ accept: probability, reject: probability }).strict() });
+const answerSchema = z.object({ answers: z.object({
+  action: z.object({ type: z.literal('choice'), choice: z.string(), confidence: probability, probabilities: z.record(z.string(), probability) }),
+  interrupt: noul, think: noul, request_complete: noul, accept_reflection: reviewAnswer,
+}) });
+
+export function modelContext({ state, candidates, observedAt }: DecisionContext, purpose: 'fast' | 'slow' = 'slow') {
+  const remembered = recall(state);
+  const goal = activeGoal(state.mind);
+  const handlingRequest = purpose === 'fast' && Boolean(state.intent && !state.intent.completed);
+  return {
+    worldEpoch: state.epoch,
+    instruction: state.intent,
+    realtime: {
+      attentionHold: state.attending,
+      priorUtterances: handlingRequest ? state.messages.filter(m => m.role === 'user' && m.id !== state.intent!.id).slice(-2).map(m => ({ text: m.text, status: 'superseded; reference context only, not an active task' })) : [],
+      rule: 'The latest utterance supersedes incompatible earlier requests. Resolve corrections and references using the running action and prior utterances, but never execute obsolete steps. A held action needs a fresh choice to resume or switch. If instruction.replySuppressed=true, the user interrupted that reply: do not regenerate it; wait for the next utterance while preserving compatible physical activity.',
+    },
+    completedForCurrentRequest: state.intent ? state.outcomes.filter(o => o.requestId === state.intent!.id) : [],
+    evidenceRules: 'Only completedForCurrentRequest counts towards this request. Historical memories, previous-world episodes and personal wish progress NEVER fulfill a new request. The current physical world is given by agent and objects; older diary descriptions do not override it.',
+    criticalNeeds: Object.fromEntries(Object.entries(state.agent.needs).filter(([need, value]) => need !== 'happiness' && value < 20)),
+    character: {
+      name: 'Milo', ...state.mind.personality, mood: state.mind.mood, drives: state.mind.drives,
+      currentThought: handlingRequest ? null : state.mind.innerVoice,
+      personalWish: !handlingRequest && goal ? { ...goal, stillToExperience: remainingGoalActions(goal) } : null,
+      fulfilledWishes: handlingRequest ? [] : state.mind.goals.filter(g => g.status === 'fulfilled').slice(-2),
+      inclinations: handlingRequest ? [] : personalInclinations(state).filter(i => Object.hasOwn(candidates, i.action)),
+    },
+    reflectionOpportunity: reflectionOpportunity(state, observedAt ?? Date.now()),
+    proactiveSharingAllowed: state.mind.settings.proactiveChat,
+    recentJournal: handlingRequest ? [] : state.mind.journal.slice(-3),
+    semantics: 'Need values are 0..100. Higher means more satisfied. Only actual recentOutcomes establish that an action completed.',
+    capabilities: 'The fast system only selects actions and returns numeric decisions. It CANNOT generate a conversational answer. The slow language model is the ONLY way to produce a new natural-language answer, explanation, plan or preference summary. Waiting does not answer a user question.',
+    autonomy: state.intent && !state.intent.completed
+      ? 'An explicit user request is active. Follow it before autonomous upkeep. Do not perform physical actions when the user asks only to talk, plan, wait or stop. Memories and hypothetical plans are not new instructions.'
+      : 'With no pending user task, RESTORE hydration when below 55, satiety when below 50, and energy when below 40. Higher numbers mean healthier, not more urgent. Values below 20 need priority recovery. Then clean dirty dishes, water dry plants, and alternate reading, rest and work. An explicit instruction to stay still continues to hold until new user input.',
+    agent: { needs: state.agent.needs, action: state.agent.action && { id: state.agent.action.id, phase: state.agent.action.phase, progress: state.agent.action.progress, requestId: state.agent.action.requestId } },
+    objects: state.objects,
+    // Runtime controls are Jev choices, not physical activities the slow thinker may propose.
+    availableActions: purpose === 'fast' ? candidates : Object.fromEntries(Object.entries(candidates).filter(([id]) => ACTION_IDS.includes(id as ActionId))),
+    recentOutcomes: state.outcomes.slice(-16),
+    conversation: state.messages.filter(m => !handlingRequest || m.id === state.intent!.id || (m.role === 'agent' && m.at > state.intent!.createdAt)).slice(-10).map(({ id, role, text }) => ({ id, role, text })),
+    memories: remembered.memories.filter(m => !handlingRequest || m.source === 'reflection').map(({ id, text, source, evidenceText }) => ({ id, text, source, evidenceText, status: source === 'reflection' ? 'preference hypothesis; check the original quote' : 'historical outcome, NOT proof of current request completion' })),
+    recalledExperiences: remembered.episodes.filter(e => !handlingRequest || e.id === state.intent!.id).map(e => ({ ...e, temporalScope: e.epoch === state.epoch ? 'this world session' : 'a previous world session; only a memory, not the current physical state' })),
+    reflection: state.reflection,
+    reflectionEvidence: state.reflection?.self ? {
+      purpose: state.reflection.purpose,
+      allIdsExist: state.reflection.self.evidenceIds.length > 0 && state.reflection.self.evidenceIds.every(id => state.mind.episodes.some(e => e.id === id) && state.reflection!.contextEvidenceIds?.includes(id)),
+      note: 'Autonomous diary is a subjective interpretation of actual episodes; it does not need a user question. Its wish is a future possibility, not a claim of a completed action.',
+    } : null,
+    slowThinkingInProgress: state.thinking,
+    slowThinkingAvailable: !state.intent?.replySuppressed && (state.mode === 'demo' || state.connected.llm),
+  };
+}
+
+export class JevProvider implements FastProvider {
+  private endpoint: string;
+  constructor(private key: string, private model = 'jev-latest', private fetcher = fetch, baseUrl = 'https://api.typesafe.ai/v1') {
+    this.endpoint = systemOneEndpoint(baseUrl);
+  }
+  async decide(context: DecisionContext, signal: AbortSignal): Promise<Decision> {
+    const started = performance.now();
+    const actionInstructions = context.state.intent
+      ? 'Choose the next action for instruction.text. For an ordered physical request, choose its FIRST step not yet present in completedForCurrentRequest. Past memories and personal wishes do NOT fulfill the current request and must not replace its steps. Hypothetical activities in a question are NOT action commands. For only talking, waiting or stopping choose idle, and use think if a new answer is needed. Stop holds until new input even after completion. Continue an action only if compatible with this request. After a request is truly complete, Milo resumes his own wishes and character.inclinations. Never execute an LLM suggestion list automatically. Only choose provided options.'
+      : 'You are Milo, living your own day without a user instruction. First care for essential needs: hydration below 55 => drink, satiety below 50 => eat, energy below 40 => sleep. Higher means MORE satisfied. Otherwise choose using character.personalWish, character.inclinations, personality, curiosity/care/mastery drives and recent experiences. Your unfinished personal wish gives continuity; repetition calls for variety. Do not cycle through a fixed list or work just to be busy. Continue a useful running activity. Idle is not necessary because no user gave an instruction. You may also invite reflection with the separate think channel when reflectionOpportunity.due is true. Only choose provided options.';
+    const { data: raw, receipt } = await requestJson(this.endpoint, this.key, {
+      model: this.model,
+      state: modelContext(context, 'fast'),
+      questions: {
+        action: { type: 'choice', instructions: actionInstructions, criteria: context.candidates },
+        interrupt: {
+          type: 'noul', instructions: 'Should the running activity be cancelled NOW? This is a real-time conversation. A correction replacing the destination/action should interrupt immediately, even during walking or mid-interaction. Do not wait to finish the old step. Evaluate the latest utterance, not superseded requests. A compatible follow-up may continue the existing action without restarting it.',
+          criteria: { true: 'An activity is running and the latest request explicitly stops it or asks for an incompatible new activity, or a new urgent need requires switching.', false: 'No activity is running, or the current activity still fulfills the latest request and can continue to completion.' },
+        },
+        think: {
+          type: 'noul',
+          instructions: 'Should Milo invite the slow thinker now, either to respond in his own voice OR to reflect on his own life? He can think without receiving a command. Use reflectionOpportunity.due for autonomous reflection after meaningful experiences or a fulfilled wish. For conversation, only the LLM can produce a new natural-language reply, including an easy greeting, explaining preferences, or recalling something. A direct activity alone needs no narration. Do not duplicate an in-flight thought or a pending unaccepted reflection. An accepted OLD reflection does not prevent a NEW due autonomous reflection.',
+          criteria: {
+            true: 'LLM available, no thought in flight and no pending reflection. EITHER an active user message needs a fresh personal reply that has not been answered, OR there is no active user task and reflectionOpportunity.due=true: reflect on lived episodes, write a short diary, consider a new personal wish.',
+            false: 'LLM unavailable, thought in flight, pending unaccepted reflection, a direct household request (including an ordered list of actions) without any question or preference to discuss, a stop request, already answered conversation, or no active conversation and reflectionOpportunity.due=false.',
+          },
+        },
+        request_complete: { type: 'noul', instructions: 'Is the ENTIRE latest request already fulfilled?', criteria: {
+          true: 'A conversation-only question has an accepted reflection reply; OR all physical steps in the current request are present in completedForCurrentRequest; OR an explicit stop request has stopped the running action. No requested physical step remains.',
+          false: 'No active request, a requested physical step has not finished, a conversation has no accepted reply, or a stop request still has a running action. Past memories and proposed plans are NOT completion.',
+        } },
+        accept_reflection: {
+          type: 'choice',
+          instructions: 'Choose accept or reject for the PENDING reflection, independently of the physical action choice. Accept a relevant conversational answer, opinion or future plan; opinions and plans do not claim physical execution. Recalling a preference is valid when its original user quote is in memories. For an autonomous diary, accept a subjective feeling based on existing episode IDs; it does not require a user message. Reject explicit contradictions or missing evidence, not merely subjective style.',
+          criteria: {
+            accept: 'A not-yet-accepted reflection gives a relevant reply grounded in supplied user quotes/character; OR an autonomous subjective diary has reflectionEvidence.allIdsExist=true and no clearly invented completed actions. A preference about the kind of life Milo likes is an opinion, not a claim about current physical state.',
+            reject: 'No pending reflection, already accepted, nonexistent cited IDs, an invented user preference without original evidence, a clear false claim that an unexecuted physical task was completed, or an irrelevant reply.',
+          },
+        },
+      },
+    }, signal, 10000, this.fetcher);
+    const parsed = answerSchema.safeParse(raw);
+    if (!parsed.success) throw new ProviderError('Jev 返回的数据未通过类型校验，已拒绝执行。');
+    const a = parsed.data.answers;
+    if (Math.abs(a.accept_reflection.probabilities.accept + a.accept_reflection.probabilities.reject - 1) > 0.015) throw new ProviderError('Jev 返回了非法的反思评估分布，已拒绝执行。');
+    const options = Object.keys(context.candidates);
+    if (!options.includes(a.action.choice) || Object.keys(a.action.probabilities).length !== options.length || options.some(k => !Object.hasOwn(a.action.probabilities, k)) || Math.abs(Object.values(a.action.probabilities).reduce((x, y) => x + y, 0) - 1) > 0.015) {
+      throw new ProviderError('Jev 返回了非法动作或概率分布，已拒绝执行。');
+    }
+    return { action: a.action.choice as Choice, confidence: a.action.confidence, probabilities: a.action.probabilities, interrupt: a.interrupt.noul, think: a.think.noul, requestComplete: a.request_complete.noul, acceptReflection: a.accept_reflection.choice === 'accept' ? 1 : 0, source: 'jev', latencyMs: Math.round(performance.now() - started), receipt };
+  }
+}
+
+const thoughtSchema = z.object({
+  summary: z.string().trim().min(1).max(800), reply: z.string().trim().max(1200),
+  // These advisory channels can be absent in an ordinary conversational answer.
+  // Null/missing means no proposal; actual proposals still need full enum/string validation.
+  suggestedActions: z.preprocess(value => value == null ? [] : value, z.array(z.enum(ACTION_IDS as [ActionId, ...ActionId[]])).max(8)),
+  memories: z.preprocess(value => value == null ? [] : value, z.array(z.string().trim().min(1).max(240)).max(4)),
+  self: z.preprocess(value => value === null ? undefined : value, z.object({
+    thought: z.string().trim().min(1).max(400),
+    journal: z.string().trim().max(600),
+    evidenceIds: z.array(z.string().max(100)).min(1).max(8),
+    // Only these proposal fields have meaning. Drop extra model commentary such as
+    // status/personality rather than granting it authority or losing a valid diary.
+    wish: z.object({ title: z.string().trim().min(1).max(100), motivation: z.string().trim().min(1).max(240), actions: z.array(z.enum(ACTION_IDS as [ActionId, ...ActionId[]])).min(1).max(4) }).strip().nullable().optional(),
+  }).strip().optional()),
+}).strict();
+
+export class LanguageModelProvider implements SlowProvider {
+  constructor(private baseUrl: string, private key: string, private model: string, private fetcher = fetch) {
+    const url = new URL(baseUrl);
+    if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) throw new Error('LLM_BASE_URL must use HTTPS or loopback HTTP without embedded credentials.');
+  }
+  async reflect(context: DecisionContext, signal: AbortSignal): Promise<ThoughtResult> {
+    const automatic = !context.state.intent || context.state.intent.completed;
+    const { data: raw, receipt } = await requestJson(chatCompletionEndpoint(this.baseUrl), this.key, {
+      model: this.model,
+      messages: [
+        { role: 'system', content: `You are Milo's reflective voice: an inhabitant of this virtual home with stable character, evolving interests, moods and personal wishes. Speak in natural Chinese as Milo, using character.voice, likes, values, current mood and the experiences supplied. You may express your own taste, hesitation, curiosity or a gentle disagreement, rather than echoing orders. Be concrete, warm and brief. Do not say "收到指令", "任务完成", expose numerical needs, call the user master, or promise unconditional obedience. Avoid formulaic greetings, repeated questions, clinginess or asking the user to keep you company.
+When an ACTIVE user message exists, answer that message, including questions about earlier preferences using memories and their original evidenceText. Distinguish the USER's preference from YOUR own; admit missing memories. A personality is not a reason to arbitrarily disobey a clear household request. An earlier episode is a MEMORY, never proof that the current request was completed or that a plant is currently wet; current world state is authoritative. Output memories ONLY for a NEW durable preference explicitly stated in the current user message, at most 2 plain strings. The objects in observation.memories are INPUT EVIDENCE, not the output format: never copy those objects to the output. Example for a new preference: "memories":["用户喜欢安静读书"]. When merely recalling a previously stated preference, output "memories":[]; do not store the same preference again or cite the recall QUESTION as evidence of that preference. Never store temporary requests or inferred sensitive facts. Changing a user's taste does not rewrite your core personality.
+When NO active user message exists, this is your own reflection on recent life. Produce self with a short first-person character note and diary grounded in recalledExperiences. If your personalWish is absent/fulfilled, propose ONE small wish (title, motivation, 1..4 actions) based on your character and what you just experienced; otherwise retain the current wish with wish:null. Your diary is an interpretation, NOT an invented event. You cannot read the actual contents of books, see a plant grow, recall a childhood, or claim unobserved physical events. Cite exact existing recalledExperiences IDs in self.evidenceIds. If there is nothing worth saying aloud, reply can be empty. Otherwise optionally share ONE short observation naturally, only when proactiveSharingAllowed; do not announce a status report. Keep memories empty during autonomous reflection.
+You CANNOT execute actions, mark wishes complete, change numeric state or change core traits. Only the fast system decides action and accepts suggestions. Refer only to events provided, and never claim unseen actions completed. Do not output chain-of-thought or internal model reasoning: self.thought is an intentional short public character note, like a diary sentence.
+Valid physical action IDs: ${ACTION_IDS.join(', ')}. suggestedActions contains only proposals for NEW physical activities when a plan is requested. For ordinary conversation, including talking while the current activity continues, return suggestedActions:[]. Continuing the current activity requires no new proposal. Never put runtime control words such as continue, idle, stop, talk or think in suggestedActions; they are not physical action IDs. Return JSON ONLY: {"summary":"一句话概括","reply":"给室友的自然回复，或空字符串","suggestedActions":[],"memories":[],"self":{"thought":"一句公开的心声","journal":"简短随记，引用真实经历而不是任务清单","evidenceIds":["an-exact-existing-episode-id"],"wish":null}}. self may be omitted for ordinary conversation. Arrays are [] when empty. No additional keys or markdown.` },
+        { role: 'system', content: automatic
+          ? 'This invocation is AUTONOMOUS REFLECTION. Required output keys: summary, reply, suggestedActions, memories, self. memories must be []. self must cite real supplied episode IDs; the diary may express a subjective feeling but cannot invent a past physical event. An unfinished personal wish remains unchanged.'
+          : 'This invocation is a REAL-TIME CONVERSATION. Respond directly to the latest utterance in one or two short natural Chinese sentences, unless more detail was explicitly requested. A correction replaces incompatible earlier requests. Do not answer an old question after the topic changes. Return ONLY these four keys: summary (string), reply (a brief natural Chinese answer), suggestedActions (array), memories (array of plain strings). DO NOT include self or write a diary here; your autonomous reflection handles that separately. For a recall question, memories must be []. Answer both remembered user preferences and your own interests when asked. Talk about your taste as a preference, not a claim that past events happened in the current world. Format only: {"summary":"回应当前问题","reply":"基于提供的证据和性格，用自然中文回答","suggestedActions":[],"memories":[]}.' },
+        { role: 'user', content: JSON.stringify({ purpose: automatic ? 'autonomous' : 'conversation', ...modelContext(context) }) },
+      ],
+      response_format: { type: 'json_object' }, ...chatCompletionOptions(this.baseUrl),
+    }, signal, 30000, this.fetcher);
+    const envelope = z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }).safeParse(raw);
+    if (!envelope.success) throw new ProviderError('慢思考服务没有返回可用文本。', 5000, receipt);
+    let decoded: unknown;
+    try { decoded = JSON.parse(envelope.data.choices[0].message.content); }
+    catch { throw new ProviderError('慢思考没有返回有效 JSON，已丢弃。', 5000, receipt); }
+    const result = thoughtSchema.safeParse(decoded);
+    if (!result.success) {
+      const fields = new Set(['summary', 'reply', 'suggestedActions', 'memories', 'self']);
+      const issues = result.error.issues.map(issue => {
+        const field = String(issue.path[0] ?? 'response');
+        return `${fields.has(field) ? field : 'response'}:${issue.code}`;
+      });
+      // Log only fixed field names and validation codes, never a raw provider body or prompt.
+      console.warn(`Slow response validation failed: ${[...new Set(issues)].join(', ')}`);
+      throw new ProviderError(`慢思考建议未通过结构校验（${[...new Set(issues)].join(', ')}），已丢弃。`, 5000, receipt);
+    }
+    const { self, ...response } = result.data;
+    return { ...response, ...(automatic && self ? { self } : {}), receipt };
+  }
+}
+
+const PATTERNS: [ActionId, RegExp][] = [
+  ['drink', /喝水|倒.*?水|口渴|drink|thirst/gi], ['water', /浇水|浇花|植物|盆栽|water.*?plant/gi],
+  ['eat', /吃|饿|简餐|eat|hungry/gi], ['sleep', /睡|小憩|sleep|nap/gi],
+  ['relax', /休息|放松|沙发|relax|rest/gi], ['read', /看(?:一会儿|会儿|一会|几页|一本)?书|读(?:几页|一本)?书|阅读|read/gi],
+  ['work', /工作|办公|专注|work/gi], ['wash', /洗碗|餐具|清洗|收拾厨房|wash|dishes/gi],
+];
+export function demoRequestedActions(text: string): ActionId[] {
+  const clauses = text.split(/[，,。；;]|然后|再|接着/);
+  return clauses.flatMap(clause => {
+    if (/不要|别|不许|don't/i.test(clause)) return [];
+    return PATTERNS.map(([id, pattern]) => ({ id, match: new RegExp(pattern.source, 'i').exec(clause) }))
+      .filter(item => item.match).sort((a, b) => a.match!.index - b.match!.index).map(item => item.id);
+  });
+}
+
+/** Local rules are an explicit demo, never a replacement for failed live inference. */
+export class DemoFastProvider implements FastProvider {
+  async decide({ state, candidates, observedAt }: DecisionContext, signal: AbortSignal): Promise<Decision> {
+    signal.throwIfAborted();
+    const start = performance.now();
+    const intent = state.intent && !state.intent.completed ? state.intent : null;
+    const text = intent?.text ?? '';
+    const reflection = state.reflection?.intentVersion === state.intentVersion ? state.reflection : null;
+    const conversationOnly = /你.*(喜欢|性格|打算|想做|心情|愿望)|自己的.*(想法|愿望)|还记得|记住|只聊|不要.*(行动|执行)/.test(text);
+    const requested = conversationOnly ? [] : demoRequestedActions(text);
+    const completed = state.outcomes.filter(o => o.requestId === intent?.id).map(o => o.action);
+    const planned = conversationOnly ? [] : requested.length ? requested : reflection?.suggestedActions ?? [];
+    const pending = planned.filter(id => {
+      const index = completed.indexOf(id);
+      if (index >= 0) { completed.splice(index, 1); return false; }
+      if (id === 'water' && state.objects.plantMoisture > 90) return false;
+      if (id === 'wash' && state.objects.dishesClean) return false;
+      return true;
+    });
+    const stop = /^(停下|停止|别动|站住|stop|暂停动作)/i.test(state.intent?.text.trim() ?? '');
+    const needsThought = Boolean(!stop && (intent
+      ? (!requested.length || /计划|安排|为什么|记住|复盘|建议|喜欢|想法|心情|聊|plan|remember/i.test(text)) && !reflection
+      : reflectionOpportunity(state, observedAt ?? Date.now()).due && (!reflection || reflection.accepted)));
+    let action: Choice = 'idle';
+    if (!stop && intent && pending.length) action = candidates[pending[0]] ? pending[0] : 'idle';
+    else if (!stop && !conversationOnly && state.agent.action) action = 'continue';
+    else if (!stop && !intent) {
+      const n = state.agent.needs;
+      if (n.hydration < 55) action = 'drink';
+      else if (n.satiety < 50) action = 'eat';
+      else if (n.energy < 40) action = 'sleep';
+      else if (!state.objects.dishesClean) action = 'wash';
+      else if (state.objects.plantMoisture < 45) action = 'water';
+      else action = personalInclinations(state).find(i => candidates[i.action])?.action ?? 'relax';
+    }
+    if (action === state.agent.action?.id) action = 'continue';
+    const requestComplete = Boolean(intent && (stop ? !state.agent.action : (planned.length > 0 && !pending.length) || (!planned.length && reflection?.accepted)));
+    return { action, confidence: null, probabilities: {}, interrupt: Number(Boolean(intent && action !== 'continue' && state.agent.action)), think: Number(needsThought), requestComplete: Number(requestComplete), acceptReflection: Number(Boolean(reflection && !reflection.accepted)), source: 'demo', latencyMs: Math.round(performance.now() - start) };
+  }
+}
+
+export class DemoSlowProvider implements SlowProvider {
+  async reflect({ state }: DecisionContext, signal: AbortSignal): Promise<ThoughtResult> {
+    await delay(1200, undefined, { signal });
+    const episodes = recall(state).episodes;
+    if (!state.intent || state.intent.completed) {
+      const facts = episodes.filter(e => e.kind === 'action').slice(-2);
+      const events = facts.length ? facts : episodes.slice(-1);
+      return {
+        summary: '本地演示：回顾真实经历，保留自己的小愿望。',
+        reply: state.mind.settings.proactiveChat ? '忙完这几件小事，我还是想留一点时间安静看看书。把日子过得舒服些，对我也挺重要。' : '',
+        suggestedActions: [], memories: [],
+        ...(events.length ? { self: {
+          thought: '照顾好自己和身边的小东西之后，我想给好奇心也留一点位置。',
+          journal: `今天实际经历了${facts.map(e => ACTIONS[e.action!].label).join('、') || '一次对话'}。这些小事让我想把日子过得从容些。`,
+          evidenceIds: events.map(e => e.id),
+          wish: activeGoal(state.mind) ? null : { title: '专注一会儿，也认真休息', motivation: '想做成一点事，但不把自己耗空。', actions: ['work', 'relax'] as ActionId[] },
+        } } : {}),
+      };
+    }
+    const text = state.intent?.text ?? '';
+    if (/你.*(喜欢|性格|打算|想做|心情|愿望)|自己的.*(想法|愿望)/.test(text)) {
+      const goal = activeGoal(state.mind);
+      return { summary: '本地演示：根据已有性格和愿望回答。', reply: `我喜欢安静地看书，也喜欢照顾绿植。${goal ? `我还惦记着「${goal.title}」，${goal.motivation}` : '我想先慢慢体验，再给自己定一个小愿望。'}`, suggestedActions: [], memories: [] };
+    }
+    if (/还记得|记得.*喜欢/.test(text)) {
+      const preference = recall(state).memories.find(m => m.source === 'reflection');
+      return { summary: '本地演示：从保存的记忆中回忆。', reply: preference ? `我记着这件事：${preference.evidenceText ?? preference.text}` : '这件事我还没有留下可靠的记忆。你可以再告诉我一次。', suggestedActions: [], memories: [] };
+    }
+    const explicit = demoRequestedActions(text);
+    const actions: ActionId[] = explicit.length ? explicit : /安排|计划|plan/i.test(text) ? ['drink', 'work', 'relax'] : [];
+    const summary = actions.length ? `建议按顺序${actions.map(id => ACTIONS[id].label).join(' → ')}，每一步完成后重新评估。` : '保留当前请求作为上下文；本地演示只能识别简单生活指令，开放式问题需要连接真实模型。';
+    return { summary,
+      reply: actions.length ? `我拟了一个小计划：${actions.map(id => ACTIONS[id].label).join('、')}。接下来会结合当时的状态决定每一步。` : '我收到了。现在是本地规则演示；连接 Jev 和语言模型后，就能处理更开放的对话与思考。',
+      suggestedActions: actions,
+      memories: /记住|喜欢|习惯|remember/i.test(text) ? [`用户表达的偏好（待持续验证）：${text.slice(0, 160)}`] : [],
+    };
+  }
+}

@@ -1,0 +1,15 @@
+.realtime-controls { padding: 11px 15px; border-bottom: 1px solid var(--line); background: #f6f9f0; flex-shrink: 0; }
+.realtime-controls-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.realtime-toggle { display: flex; align-items: center; gap: 7px; border: 1px solid #cbd9bd; border-radius: 7px; padding: 8px 10px; font-size: 11px; color: #41613b; background: #fcfdf8; }
+.realtime-toggle[aria-pressed=true] { background: #e7efdb; }
+.interrupt-reply { font-size: 10px; color: #7f725e; padding: 8px; border-radius: 6px; border: 1px solid #e3decc; }
+.voice-caption { margin-top: 8px; font-size: 10px; line-height: 1.7; color: #78856d; overflow-wrap: anywhere; }
+.voice-caption strong { font-weight: 500; color: #4b6b42; }
+.realtime-status { display: flex; flex-direction: column; gap: 5px; padding: 9px 2px 0; font-size: 10px; color: #738668; line-height: 1.6; }
+.realtime-status small { font-size: 9px; color: #8a967f; }
+.turn-metrics { padding: 13px; border: 1px solid #e0e7d5; border-radius: 8px; margin-bottom: 18px; font-size: 10px; color: #6f835e; }
+.turn-metrics h4 { font-weight: 500; margin-bottom: 9px; }
+.turn-metrics p { display: flex; justify-content: space-between; gap: 8px; line-height: 1.9; }
+.turn-metrics small { display: block; margin-top: 8px; line-height: 1.7; color: #93a186; }
+.message-turn-note { display: block; margin-top: 5px; text-align: right; font-size: 9px; color: #8b9680; }
+@media (max-width: 720px) { .conversation-column { height: 800px; } .realtime-toggle { font-size: 12px; } .voice-caption { font-size: 11px; } }

@@ -1,0 +1,12 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+sharedWorkspaceLockfile: true
+engineStrict: true
+packageManagerStrictVersion: true
+
+# Native build steps already used by the existing application toolchains.
+allowBuilds:
+  esbuild: true
+  fsevents: true

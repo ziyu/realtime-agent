@@ -1,0 +1,24 @@
+{
+  "name": "realtime-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=22.13.0",
+    "pnpm": "11.1.2"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @realtime-agent/home run dev",
+    "dev:home": "pnpm --filter @realtime-agent/home run dev",
+    "dev:demo": "pnpm --filter @realtime-agent/demo run dev",
+    "dev:all": "pnpm --parallel --filter './apps/*' run dev",
+    "start": "pnpm --filter @realtime-agent/home run start",
+    "start:demo": "pnpm --filter @realtime-agent/demo run start",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r --workspace-concurrency=1 run test",
+    "test:e2e": "pnpm -r --workspace-concurrency=1 run test:e2e",
+    "test:live": "pnpm --filter @realtime-agent/home run test:live"
+  }
+}

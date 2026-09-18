@@ -1,0 +1,42 @@
+{
+  "name": "@realtime-agent/home",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n world,web \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:live": "playwright test --config playwright.live.config.ts"
+  },
+  "dependencies": {
+    "@realtime-agent/config": "workspace:*",
+    "dotenv": "^17.2.3",
+    "express": "5.2.1",
+    "lucide-react": "^0.577.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "three": "0.186.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.183.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  }
+}

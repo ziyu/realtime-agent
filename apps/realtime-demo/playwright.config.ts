@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test';
+export default defineConfig({testDir:'./tests',testMatch:'**/*.e2e.ts',workers:1,timeout:45000,reporter:'list',use:{baseURL:'http://localhost:3008',headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',trace:'off',video:'off',screenshot:'off'},webServer:{command:'pnpm run dev',url:'http://localhost:3008/api/state',env:{PORT:'3008',AGENT_MODE:'demo',AGENT_DATA_DIR:'.test-data'},reuseExistingServer:false,timeout:40000}});

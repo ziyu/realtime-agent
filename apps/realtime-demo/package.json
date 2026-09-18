@@ -1,0 +1,30 @@
+{
+  "name": "@realtime-agent/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "start": "tsx server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@realtime-agent/config": "workspace:*",
+    "three": "0.186.0",
+    "vite": "8.3.0",
+    "tsx": "4.21.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.0",
+    "@types/three": "^0.183.1",
+    "@playwright/test": "1.63.0"
+  }
+}
