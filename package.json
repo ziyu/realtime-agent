@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @realtime-agent/home run dev",
+    "dev:cloudflare": "pnpm --filter @realtime-agent/home run dev:cloudflare",
     "dev:home": "pnpm --filter @realtime-agent/home run dev",
     "dev:demo": "pnpm --filter @realtime-agent/demo run dev",
     "dev:all": "pnpm --parallel --filter './apps/*' run dev",
@@ -22,7 +23,11 @@
     "test:live": "pnpm --filter @realtime-agent/home run test:live",
     "test:native": "pnpm --filter @realtime-agent/home run test:native",
     "test:livekit": "pnpm --filter @realtime-agent/home run test:livekit",
+    "test:cloudflare": "pnpm --filter @realtime-agent/home run test:cloudflare",
     "test:voice-api": "pnpm --filter @realtime-agent/home run test:voice-api",
+    "test:agent-package": "node scripts/verify-agent-package.mjs",
+    "test:agent-live": "pnpm --filter @realtime-agent/home run test:agent-live",
+    "test:controlled-live": "pnpm --filter @realtime-agent/home run test:controlled-live",
     "voice:infra:up": "node scripts/livekit-infra.mjs up",
     "voice:infra:down": "node scripts/livekit-infra.mjs down"
   }

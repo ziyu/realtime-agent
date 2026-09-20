@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { Room, RoomEvent } from '@livekit/rtc-node';
 import { initializeLogger, llm, voice } from '@livekit/agents';
-import { z } from 'zod';
 import { Behavior, FunctionResponseScheduling } from '@google/genai';
 import type { VoiceConfig } from '@realtime-agent/config';
 import type { VoiceProfile } from '../../shared/voice';
@@ -10,16 +9,18 @@ import type { VoiceBridge } from './bridge';
 import type { VoiceBackend } from './gateway';
 import { VoiceTurns } from './turns';
 import { observeModel } from './model-lifecycle';
+import { ControlledRealtimeModel } from './controlled-model';
 
 // Provider failures can contain request objects. Only our sanitized session errors are exposed.
 initializeLogger({ pretty: false, level: 'silent' });
 
 export async function createVoiceModel(profile: VoiceProfile, config: VoiceConfig) {
+  if (profile.id === 'cloudflare-grok') throw new Error('Cloudflare voice requires the account WebSocket adapter.');
   if (profile.id === 'livekit-duplex') {
     const openai = await import('@livekit/agents-plugin-openai');
     return new openai.realtime.GPTLiveModel({ model: profile.model, voice: profile.voice, apiKey: config.openaiKey,
       responsesOptions: { model: config.models.backend, maxOutputTokens: 800,
-        instructions: 'You handle Milo’s world observations. Call observe_world for actual state. Jev alone performs physical actions from final user transcripts. Never invent completion. Return a short factual result to the voice model.',
+        instructions: 'Jev controls actions and speech. Only render supplied VERIFIED_TEXT; do not answer the user independently or call tools.',
       },
     });
   }
@@ -32,14 +33,14 @@ export async function createVoiceModel(profile: VoiceProfile, config: VoiceConfi
     });
   }
   if (profile.id === 'livekit-grok') {
-    const xai = await import('@livekit/agents-plugin-xai');
-    return new xai.realtime.RealtimeModel({ model: profile.model, voice: profile.voice, apiKey: config.xaiKey });
+    const { GrokRealtimeModel } = await import('./grok-model');
+    return new GrokRealtimeModel({ model: profile.model, voice: profile.voice, apiKey: config.xaiKey });
   }
   const openai = await import('@livekit/agents-plugin-openai');
   return new openai.realtime.RealtimeModel({ model: profile.model, voice: profile.voice, apiKey: config.openaiKey,
     inputAudioTranscription: { model: 'gpt-4o-mini-transcribe', language: 'zh' },
     inputAudioNoiseReduction: { type: 'near_field' },
-    turnDetection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true },
+    turnDetection: { type: 'semantic_vad', eagerness: 'medium', create_response: false, interrupt_response: true },
   });
 }
 
@@ -50,17 +51,18 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
   const service = new RoomServiceClient(config.livekit.url.replace(/^ws/, 'http'), config.livekit.apiKey, config.livekit.apiSecret);
   const model = await modelFactory(profile, config);
   const turns = new VoiceTurns(bridge);
-  let closed = false, started = false, outputSequence = 0;
-  const messageSequences = new Map<string, number>();
+  let closed = false, started = false;
   const lifecycle = observeModel(model, provider => {
     // Raw OpenAI/xAI IDs are available before their generic speech events are emitted.
     if (provider instanceof llm.RealtimeSession) provider.on('openai_server_event_received', (event: Record<string, unknown>) => {
       if (closed || !bridge.active) return;
       if (event.type === 'input_audio_buffer.speech_started' && typeof event.item_id === 'string') turns.start(event.item_id);
-      if (event.type === 'response.output_item.added') {
-        const item = event.item as { id?: string } | undefined;
-        if (item?.id) { messageSequences.set(item.id, turns.sequence); if (messageSequences.size > 128) messageSequences.delete(messageSequences.keys().next().value!); }
+      // xAI's plugin may hold a final transcript until its first output audio frame.
+      // The body can react as soon as the provider's final transcript arrives.
+      if (event.type === 'conversation.item.input_audio_transcription.completed' && event.status !== 'in_progress' && typeof event.item_id === 'string' && typeof event.transcript === 'string') {
+        turns.transcript({ itemId: event.item_id, transcript: event.transcript, isFinal: true });
       }
+
     });
     const inputStarted = () => { if (!closed && bridge.active && !turns.hearing) turns.start(); };
     const inputStopped = () => { if (!closed && bridge.active) turns.stop(); };
@@ -78,11 +80,39 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
       provider.on('input_audio_transcription_completed', inputTranscribed);
     }
   });
-  const session = new voice.AgentSession({ llm: lifecycle.model });
+  const controlled = new ControlledRealtimeModel(lifecycle.model instanceof llm.DuplexModel ? new llm.DuplexRealtimeAdapter(lifecycle.model) : lifecycle.model, bridge);
+  const session = new voice.AgentSession({ llm: controlled });
+  let pendingOutput: AbortController | null = null;
+  let requestedExecution: string | null = null;
+  const requestOutput = () => {
+    if (closed || !bridge.active) { pendingOutput?.abort(); return; }
+    if (!started) return;
+    const execution = bridge.runtime.speechAction();
+    if (!execution || bridge.runtime.state.speech?.delivered || bridge.runtime.state.speech?.error) {
+      if (requestedExecution) { pendingOutput?.abort(); requestedExecution = null; }
+      return;
+    }
+    if (execution.id === requestedExecution) return;
+    requestedExecution = execution.id;
+    pendingOutput?.abort(); const controller = new AbortController(); pendingOutput = controller;
+    const sequence = bridge.state.sequence;
+    void (async () => {
+      await session.interrupt({ force: true }).await.catch(() => undefined);
+      const plan = await bridge.outputPlan(sequence, controller.signal);
+      if (!plan || controller.signal.aborted || closed || !bridge.allowOutput(plan.id, sequence)) return;
+      const handle = session.generateReply({ instructions: controlled.authorize(plan), allowInterruptions: true });
+      const cancel = () => { handle.interrupt(true); };
+      const outputSignal = bridge.outputSignal(plan);
+      outputSignal.addEventListener('abort', cancel, { once: true });
+      try { await handle.waitForPlayout(); if (!handle.interrupted && bridge.allowOutput(plan.id, sequence)) bridge.event({ type: 'reply', sequence, itemId: plan.id, text: plan.exactText }); } finally { outputSignal.removeEventListener('abort', cancel); }
+    })().catch(() => { if (!controller.signal.aborted && !closed) bridge.outputRejected(sequence); });
+  };
+  const unsubscribeInput = bridge.subscribeActivity(requestOutput);
   let closing: Promise<void> | undefined;
   const close = async () => {
     if (closing) return closing;
     closed = true;
+    pendingOutput?.abort(); unsubscribeInput();
     closing = (async () => {
       // Close input/network and provider generation together, before a framework drain can wait.
       await Promise.allSettled([lifecycle.closeConnections(), room.disconnect(), service.deleteRoom(roomName)]);
@@ -95,14 +125,8 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
   signal.addEventListener('abort', onAbort, { once: true });
   session.on(voice.AgentSessionEventTypes.AgentStateChanged, event => {
     if (closed) return;
-    if (event.newState === 'speaking') { outputSequence = turns.sequence; bridge.audioStarted(turns.sequence); }
+    if (event.newState === 'speaking') bridge.audioStarted(turns.sequence);
     else if (['listening', 'thinking'].includes(event.newState)) bridge.setStatus(event.newState as 'listening' | 'thinking');
-  });
-  session.on(voice.AgentSessionEventTypes.ConversationItemAdded, event => {
-    const item = event.item;
-    if (!closed && item.type === 'message' && item.role === 'assistant' && !item.interrupted && item.textContent) {
-      bridge.event({ type: 'reply', sequence: messageSequences.get(item.id) ?? outputSequence, itemId: item.id, text: item.textContent });
-    }
   });
   session.on(voice.AgentSessionEventTypes.Error, () => {
     bridge.fail('语音模型连接出错，请检查模型权限、额度或网络后重新开始。'); void close();
@@ -113,13 +137,7 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
   room.on(RoomEvent.Disconnected, () => {
     if (!closed) { bridge.fail('实时音频连接已断开，请重新开始通话。'); void close(); }
   });
-  const agent = new voice.Agent({ instructions, tools: {
-    observe_world: llm.tool({ description: 'Read authoritative current world and wait briefly for Jev to apply the latest final transcript. Never mutates the world. Superseded means discard this old question.',
-      parameters: z.object({}), execute: async (_args, { abortSignal }) => {
-        abortSignal.throwIfAborted(); return bridge.observe(turns.sequence, abortSignal);
-      },
-    }),
-  } });
+  const agent = new voice.Agent({ instructions });
   try {
     signal.throwIfAborted();
     await service.createRoom({ name: roomName, emptyTimeout: 30, maxParticipants: 2 });
@@ -133,6 +151,7 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
     signal.throwIfAborted();
     await session.start({ agent, room, record: false, inputOptions: { participantIdentity: humanIdentity, textEnabled: false, videoEnabled: false, closeOnDisconnect: true }, outputOptions: { transcriptionEnabled: true } });
     started = true;
+    requestOutput();
     signal.throwIfAborted();
     return {
       connection: { kind: 'livekit', url: config.livekit.url, participantToken: await token(humanIdentity) },
@@ -141,10 +160,10 @@ export async function startLiveKit(profile: VoiceProfile, bridge: VoiceBridge, i
       },
       async sendText(text: string) {
         if (closed || !bridge.active) throw new Error('Session closed.');
-        const sequence = turns.text(text, `text-${randomUUID()}`);
-        await session.interrupt({ force: true }).await.catch(() => undefined);
-        if (closed || sequence !== turns.sequence) return;
-        session.generateReply({ userInput: text, allowInterruptions: true });
+        // Final text follows the same decision gate as microphone transcripts.
+        const chat = session.currentAgent.chatCtx.copy(); chat.addMessage({ role: 'user', content: text });
+        await session.currentAgent.updateChatCtx(chat);
+        turns.text(text, `text-${randomUUID()}`);
       },
       async close() { signal.removeEventListener('abort', onAbort); await close(); },
     };

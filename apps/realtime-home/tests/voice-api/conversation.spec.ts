@@ -5,10 +5,12 @@ import type { WorldState } from '../../shared/types';
 test('native model receives real audio, returns audio, and redirects Jev after a spoken correction', async ({ page, request }) => {
   expect((await (await request.get('/api/health')).json()).mode).toBe('live');
   await request.post('/api/control', { data: { type: 'reset' } });
+  const catalog = await (await request.get('/api/voice/catalog')).json();
+  const profileId = process.env.VOICE_TEST_PROFILE || catalog.defaultProfile;
   let result = 'failed';
   try {
     await page.goto('/');
-    await page.getByRole('combobox', { name: '实时语音方案' }).selectOption(process.env.VOICE_TEST_PROFILE || 'openai-webrtc');
+    await page.getByRole('combobox', { name: '实时语音方案' }).selectOption(profileId);
     await page.getByRole('button', { name: '开始实时对话', exact: true }).click();
     await expect.poll(async () => {
       const s = await (await request.get('/api/state')).json() as WorldState;
@@ -36,7 +38,7 @@ test('native model receives real audio, returns audio, and redirects Jev after a
     await request.post('/api/control', { data: { type: 'pause', paused: true } });
     const world = await (await request.get('/api/state')).json() as WorldState;
     mkdirSync('test-results/native-api', { recursive: true });
-    writeFileSync(`test-results/native-api/${process.env.VOICE_TEST_PROFILE || 'openai-webrtc'}-${Date.now()}.json`, JSON.stringify({
+    writeFileSync(`test-results/native-api/${profileId}-${Date.now()}.json`, JSON.stringify({
       result, verifiedAt: new Date().toISOString(), source: 'recorded PCM WAV, real providers; not a physical microphone',
       turns: world.turns, metrics: world.metrics, outcomes: world.outcomes, responses: world.traces.filter(trace => trace.receipt),
     }, null, 2), { mode: 0o600 });

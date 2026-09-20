@@ -11,7 +11,7 @@ const config: VoiceConfig = {
 
 describe('installed realtime provider integrations', () => {
   it('constructs all four real plugin classes with the selected model and audio capabilities without opening sessions', async () => {
-    for (const profile of voiceCatalog(config).profiles.filter(profile => profile.id !== 'openai-webrtc')) {
+    for (const profile of voiceCatalog(config).profiles.filter(profile => profile.id.startsWith('livekit-'))) {
       const model = await createVoiceModel(profile, config);
       expect(model.model).toBe(profile.model);
       expect(model.capabilities.userTranscription).toBe(true);

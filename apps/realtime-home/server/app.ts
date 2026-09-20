@@ -33,14 +33,17 @@ export function createApp(runtime: AgentRuntime, options: { port?: number; voice
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders(); res.write('retry: 1500\n\n');
+    let pending = false;
     const send = (state: unknown) => {
-      if (res.destroyed) return;
-      if (res.writableLength > 524288) { res.end(); return; }
+      if (res.destroyed || res.writableEnded) return;
+      // Keep at most one snapshot queued; the next drain sends the latest state.
+      if (res.writableNeedDrain) { pending = true; return; }
       res.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
     };
+    res.on('drain', () => { if (pending) { pending = false; send(runtime.snapshot()); } });
     send(runtime.snapshot());
     const unsubscribe = runtime.subscribe(send);
-    const heartbeat = setInterval(() => { if (!res.destroyed) res.write(': heartbeat\n\n'); }, 15000);
+    const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded && !res.writableNeedDrain) res.write(': heartbeat\n\n'); }, 15000);
     res.on('close', () => { unsubscribe(); clearInterval(heartbeat); });
   });
   app.post('/api/messages', (req, res) => {

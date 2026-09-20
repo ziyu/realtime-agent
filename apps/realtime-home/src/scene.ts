@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { ACTIONS, WALLS } from '../shared/world';
+import { TARGETS, isMovement, ACTIONS, WALLS } from '../shared/world';
 import type { ActionId, ActionSpec, WorldState } from '../shared/types';
 
 export function createHome(container: HTMLElement, onSelect: (id: ActionId) => void, onError: (message: string) => void) {
@@ -212,7 +212,7 @@ export function createHome(container: HTMLElement, onSelect: (id: ActionId) => v
       const wave = moving ? Math.sin(time / 105 * world.speed) * 0.55 : 0;
       legs[0].rotation.x = wave; legs[1].rotation.x = -wave; arms[0].rotation.x = -wave; arms[1].rotation.x = wave;
       torso.position.y = world.paused ? 0 : Math.sin(time / (moving ? 105 : 550)) * (moving ? 0.035 : 0.018);
-      if (!world.paused && world.agent.action?.phase === 'acting') {
+      if (!world.paused && world.agent.action?.phase === 'acting' && !isMovement(world.agent.action.id)) {
         const id = world.agent.action.id;
         arms[1].rotation.x = ['water', 'drink', 'wash'].includes(id) ? -0.8 + Math.sin(time / 220) * 0.25 : -0.2;
         if (id === 'sleep' || id === 'relax') torso.position.y -= 0.12;
@@ -227,8 +227,9 @@ export function createHome(container: HTMLElement, onSelect: (id: ActionId) => v
     update(state: WorldState, selected: ActionId | null) {
       world = state;
       if (initializedEpoch !== state.epoch) { avatar.position.set(state.agent.position.x, 0, state.agent.position.z); initializedEpoch = state.epoch; }
-      const id = selected ?? state.agent.action?.id; targetRing.visible = !!id;
-      if (id) targetRing.position.set(ACTIONS[id].destination.x, 0.18, ACTIONS[id].destination.z);
+      const action = state.agent.action;
+      const id = selected ?? (action ? isMovement(action.id) ? action.target : action.id : null); targetRing.visible = !!id;
+      if (id) targetRing.position.set(TARGETS[id].destination.x, 0.18, TARGETS[id].destination.z);
       pathLine.geometry.dispose();
       pathLine.geometry = new THREE.BufferGeometry().setFromPoints([state.agent.position, ...(state.agent.action?.path ?? [])].map(p => new THREE.Vector3(p.x, 0.2, p.z)));
       pathLine.computeLineDistances();

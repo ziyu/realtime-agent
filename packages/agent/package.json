@@ -1,0 +1,32 @@
+{
+  "name": "@realtime-agent/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Environment-independent realtime agent coordination, execution receipts and grounded observations.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./system-one": { "types": "./dist/system-one.d.ts", "import": "./dist/system-one.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "example:local": "tsx examples/local.ts",
+    "prepack": "pnpm run build"
+  },
+  "peerDependencies": { "@system-one-ai/sdk": ">=0.5.2 <1" },
+  "peerDependenciesMeta": { "@system-one-ai/sdk": { "optional": true } },
+  "devDependencies": {
+    "@system-one-ai/sdk": "0.5.2",
+    "@types/node": "^24.10.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

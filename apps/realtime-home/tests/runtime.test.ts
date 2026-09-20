@@ -67,6 +67,19 @@ describe('authoritative action runtime', () => {
     expect(runtime.state.outcomes[0].requestId).toBe(runtime.state.intent?.id);
     expect(runtime.state.memories[0].source).toBe('experience');
   });
+  it('approaches an object for inspection without performing its household action', async () => {
+    const runtime = makeRuntime({ decide: async () => decision({ action: 'approach', target: 'sleep' }) });
+    runtime.message('去床边看看');
+    const energy = runtime.state.agent.needs.energy;
+    await decide(runtime);
+    expect(runtime.state.agent.action).toMatchObject({ id: 'approach', target: 'sleep', phase: 'walking' });
+    finishAction(runtime);
+    expect(runtime.state.agent.position).toEqual(ACTIONS.sleep.destination);
+    expect(runtime.state.outcomes.at(-1)).toMatchObject({ action: 'approach', target: 'sleep' });
+    expect(runtime.state.agent.needs.energy).toBeLessThan(energy);
+    expect(runtime.state.agent.needs.energy).toBeGreaterThan(energy - 2);
+    expect(runtime.state.memories.some(memory => memory.text.includes('睡一会儿'))).toBe(false);
+  });
   it('selects ordered user instructions one step at a time', async () => {
     const runtime = makeRuntime();
     runtime.message('先喝水，再给植物浇水，最后看书');

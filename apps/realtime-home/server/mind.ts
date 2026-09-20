@@ -93,6 +93,7 @@ export function advanceMind(world: WorldState, seconds: number) {
 export function recordOutcome(world: WorldState, outcome: Outcome, goalId?: string) {
   const mind = world.mind;
   const action = outcome.action;
+  if (action === 'approach' || action === 'inspect') return;
   addEpisode(mind, { id: outcome.id, kind: 'action', action, at: outcome.at, epoch: world.epoch, requestId: outcome.requestId, text: `${outcome.requestId ? '回应室友的请求，' : '自己选择'}完成了${ACTIONS[action].label}。${outcome.effects}。` });
   mind.lifetimeCompleted++;
   const drive: Drive = action === 'read' ? 'curiosity' : action === 'water' || action === 'wash' ? 'care' : action === 'work' ? 'mastery' : 'connection';

@@ -67,18 +67,38 @@ describe('native audio and authoritative behavior', () => {
     expect(r.state.outcomes).toEqual([]); expect(r.state.messages.some(m => m.text === '旧回答')).toBe(false);
     expect(r.state.metrics.llmCalls).toBe(0); b.close();
   });
-  it('does not invoke the old text LLM in native mode and never plays a native reply using browser TTS metadata', async () => {
+  it('uses the same slow proposal and explicit speak in native mode without browser TTS duplication', async () => {
     vi.useFakeTimers(); vi.setSystemTime(100000);
     const r = runtime(); r.setNativeVoice(true); r.start();
     const b = new VoiceBridge(r, r.state.epoch, 'test-session', Date.now() + 900000);
     b.event({ type: 'input', sequence: 1, itemId: 'one', text: '你喜欢怎样的生活？只聊天，不要行动' });
     await vi.advanceTimersByTimeAsync(1100);
-    expect(r.state.metrics.llmCalls).toBe(0);
-    b.event({ type: 'reply', sequence: 1, itemId: 'reply', text: '我喜欢阅读，也喜欢照顾绿植。' });
-    b.event({ type: 'reply', sequence: 1, itemId: 'reply', text: '我喜欢阅读，也喜欢照顾绿植。' });
+    expect(r.state.metrics.llmCalls).toBe(1);
+    expect(b.event({ type: 'reply', sequence: 1, itemId: 'unapproved', text: '未经许可的回复' })).toBe(false);
+    const plan = await b.outputPlan(1);
+    expect(plan?.exactText).toBe('unexpected');
+    expect(plan?.executionId).toBe(r.state.speechExecution?.id);
+    b.event({ type: 'reply', sequence: 1, itemId: plan!.id, text: plan!.exactText });
+    b.event({ type: 'reply', sequence: 1, itemId: plan!.id, text: plan!.exactText });
+    await vi.advanceTimersByTimeAsync(100);
     expect(r.state.messages.filter(m => m.nativeAudio)).toHaveLength(1);
     expect(r.state.intent?.replyDelivered).toBe(true);
     expect(r.state.outcomes).toEqual([]); b.close();
+  });
+  it('exposes object appearance only after Jev accepted an approach and the body actually arrived', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(100000);
+    const r = runtime(); r.setNativeVoice(true); r.start();
+    const b = new VoiceBridge(r, r.state.epoch, 'inspect-session', Date.now() + 900000);
+    b.event({ type: 'input', sequence: 1, itemId: 'bed', text: '去床边看看' });
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(r.state.agent.action).toMatchObject({ id: 'inspect', target: 'sleep' });
+    expect(b.observation(1).observedObject).toBeNull();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(r.state.agent.action).toBeNull();
+    expect(b.observation(1).completedDetails).toContainEqual({ action: 'inspect', target: 'sleep' });
+    expect(b.observation(1).observedObject).toMatchObject({ target: 'sleep', object: '床' });
+    expect(b.observation(1).observedObject?.appearance).toContain('暖棕色');
+    b.close();
   });
   it('a readonly tool waiting for a transcript cannot apply an old result after a newer turn begins', async () => {
     vi.useFakeTimers(); vi.setSystemTime(100000);

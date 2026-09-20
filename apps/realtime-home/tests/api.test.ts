@@ -118,4 +118,24 @@ describe('local world HTTP API', () => {
       expect(buffer).toContain('"status":"paused"');
     } finally { controller.abort(); reader.releaseLock(); }
   });
+  it('coalesces large diagnostic snapshots under backpressure without ending the stream or losing the last state', async () => {
+    const { url, runtime } = await fixture();
+    runtime.state.traces.push({ id: 'large-diagnostic', at: Date.now(), kind: 'decision', title: '模型输入', detail: '', data: 'x'.repeat(600000) });
+    const controller = new AbortController();
+    const response = await fetch(`${url}/api/events`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]) });
+    const reader = response.body!.getReader(), decoder = new TextDecoder();
+    try {
+      // Burst before the client drains its response, as several output stages can share one tick.
+      for (let i = 0; i < 20; i++) runtime.message(`诊断输入 ${i}`);
+      runtime.pause(true);
+      let buffer = '';
+      while (!buffer.includes('"paused":true')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('Diagnostic stream closed under backpressure');
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(buffer).toContain(runtime.state.intent!.id);
+      expect((await fetch(`${url}/api/health`)).status).toBe(200);
+    } finally { controller.abort(); reader.releaseLock(); }
+  });
 });

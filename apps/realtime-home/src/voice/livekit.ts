@@ -28,10 +28,14 @@ export async function connectLiveKit({ ticket, callbacks, signal }: AudioOptions
   room.on(RoomEvent.Disconnected, () => { if (!closed) callbacks.error('LiveKit 音频连接已断开，请重新连接。'); });
   room.registerTextStreamHandler('lk.transcription', async (reader, participant) => {
     try {
+      // The agent publishes both sides' transcripts. Track metadata identifies
+      // the user's microphone even when the transport reports the agent sender.
+      const trackId = reader.info.attributes?.['lk.transcribed_track_id'];
+      const fromUser = participant.identity === room.localParticipant.identity || Boolean(trackId && [...room.localParticipant.audioTrackPublications.values()].some(publication => publication.trackSid === trackId));
       let text = '';
       for await (const chunk of reader) {
         if (closed) return; text = (text + chunk).slice(-2400);
-        if (participant.identity.startsWith('milo-agent-')) callbacks.output(text); else callbacks.input(text);
+        if (fromUser || !participant.identity.startsWith('milo-agent-')) callbacks.input(text); else callbacks.output(text);
       }
     } catch { /* The stream may be cancelled when the user interrupts. */ }
   });

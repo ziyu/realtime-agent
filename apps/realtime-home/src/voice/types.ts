@@ -1,6 +1,8 @@
+import type { WorldState } from '../../shared/types';
 import type { NativeVoiceStatus, VoiceSessionTicket } from '../../shared/voice';
 
 export interface AudioConnection {
+  syncOutput?(world: WorldState): void;
   close(): void;
   interrupt(): void;
   sendText(text: string): Promise<void>;
@@ -20,9 +22,10 @@ export interface AudioOptions {
   signal: AbortSignal;
 }
 export async function voiceRequest<T = unknown>(ticket: VoiceSessionTicket, action: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
+  const timeout = AbortSignal.timeout(10000);
   const response = await fetch(`/api/voice/sessions/${ticket.id}/${action}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ticket.token}` },
-    body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
+    body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     keepalive: action === 'end',
   });
   if (!response.ok) {

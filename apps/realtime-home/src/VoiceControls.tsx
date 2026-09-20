@@ -12,10 +12,10 @@ export function VoiceControls({ voice, connected, paused, canInterrupt, onToggle
 }) {
   return <div className="realtime-controls" data-testid="realtime-controls">
     <label className="voice-profile-label">对话声音<select aria-label="实时语音方案" value={voice.profile} disabled={voice.active} onChange={event => voice.selectProfile(event.target.value as VoiceProfileId | 'browser')}>
-      {(voice.catalog?.profiles ?? [{ id: 'openai-webrtc', label: 'GPT-Realtime · 直连', configured: false }]).map(profile => <option key={profile.id} value={profile.id}>{profile.label}{profile.configured ? '' : ' · 待配置'}</option>)}
+      {(voice.catalog?.profiles ?? [{ id: 'cloudflare-grok', label: 'Cloudflare · Grok 实时语音', configured: false }]).map(profile => <option key={profile.id} value={profile.id}>{profile.label}{profile.configured ? '' : ' · 待配置'}</option>)}
       <option value="browser">浏览器语音 · 旧版</option>
     </select></label>
-    {voice.isNative && <div className="voice-provider-note"><span>{voice.selected?.framework ?? 'OpenAI Agents SDK'}</span><code>{voice.selected?.model ?? 'gpt-realtime-2.1'}</code></div>}
+    {voice.isNative && <div className="voice-provider-note"><span>{voice.selected?.framework ?? 'LiveKit Agents'}</span><code>{voice.selected?.model ?? 'xai/grok-voice'}</code></div>}
     <div className="realtime-controls-row"><button type="button" className="realtime-toggle" aria-pressed={voice.active} disabled={!voice.supported || !connected || paused} onClick={onToggle}><Mic size={15} />{voice.active ? '结束实时对话' : '开始实时对话'}</button>
       <button type="button" className="interrupt-reply" disabled={!connected || !canInterrupt} onClick={onInterrupt}>打断回复</button>
       {voice.active && voice.isNative && <button type="button" className="icon-button" aria-label={voice.muted ? '开启麦克风' : '静音麦克风'} aria-pressed={voice.muted} onClick={voice.toggleMute}>{voice.muted ? <MicOff size={16} /> : <Mic size={16} />}</button>}

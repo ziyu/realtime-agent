@@ -16,7 +16,7 @@ const llmReady = Boolean(llm.apiKey && llm.model);
 const memory = new LifeStore(resolve(config.dataDirectory, `life-${mode}.json`), resolve(config.dataDirectory, `memories-${mode}.json`));
 const life = memory.load();
 const runtime = new AgentRuntime({
-  mode,
+  mode, provider: config.provider,
   fast: mode === 'demo' ? new DemoFastProvider() : new JevProvider(systemOne.apiKey, systemOne.model, fetch, systemOne.baseUrl),
   slow: mode === 'demo' ? new DemoSlowProvider() : llmReady ? new LanguageModelProvider(llm.baseUrl, llm.apiKey, llm.model) : null,
   jevModel: systemOne.model, llmModel: llm.model,

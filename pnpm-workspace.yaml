@@ -10,6 +10,7 @@ packageManagerStrictVersion: true
 allowBuilds:
   '@google/genai': false
   '@livekit/local-inference': false
+  core-js-pure: false
   esbuild: true
   fsevents: true
   protobufjs: false

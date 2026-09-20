@@ -6,7 +6,7 @@ import { voiceRequest } from './types';
 
 export function useNativeVoice(world: WorldState | null, onError: (message: string) => void) {
   const [catalog, setCatalog] = useState<VoiceCatalog | null>(null);
-  const [profile, setProfile] = useState<VoiceProfileId | 'browser'>('openai-webrtc');
+  const [profile, setProfile] = useState<VoiceProfileId | 'browser'>('cloudflare-grok');
   const [status, setStatus] = useState<NativeVoiceStatus>('off');
   const [transcript, setTranscript] = useState('');
   const [output, setOutput] = useState('');
@@ -42,6 +42,7 @@ export function useNativeVoice(world: WorldState | null, onError: (message: stri
     } catch { setCatalogError('没有读到语音配置，请检查家园服务并刷新配置。'); }
   };
   useEffect(() => { void refresh(); return () => stop(); }, []);
+  useEffect(() => { if (world) connection.current?.syncOutput?.(world); }, [world]);
   const start = async () => {
     if (active) return;
     const snapshot = worldRef.current;
@@ -71,11 +72,15 @@ export function useNativeVoice(world: WorldState | null, onError: (message: stri
         error: fail, audioBlocked: () => { if (current()) setAudioBlocked(true); },
       } };
       let polling = false;
+      let reportedBlocks = 0;
       timer.current = setInterval(() => {
         if (!current() || polling) return; polling = true;
         void voiceRequest<VoiceSessionState>(ticket, 'heartbeat', {}, abort.signal).then(state => {
           if (!current()) return;
           if (state.error) { fail(state.error); return; }
+          if (state.outputError && (state.blockedOutputs ?? 0) > reportedBlocks) {
+            reportedBlocks = state.blockedOutputs ?? 0; errorRef.current(state.outputError);
+          }
           if (ticket.connection.kind === 'livekit' && state.status !== 'connecting') setStatus(state.status);
         }).catch(() => { if (current()) fail('实时会话已结束或连接中断，请重新开始。'); }).finally(() => { polling = false; });
       }, 2000);
@@ -85,6 +90,7 @@ export function useNativeVoice(world: WorldState | null, onError: (message: stri
         : await (await import('./livekit')).connectLiveKit(options);
       if (!current()) { result.close(); return; }
       connection.current = result;
+      if (worldRef.current) result.syncOutput?.(worldRef.current);
     } catch (error) {
       if (!current()) return;
       const device = error instanceof DOMException;

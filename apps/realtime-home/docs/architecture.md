@@ -1,5 +1,7 @@
 # RealtimeAgent v0.1 架构
 
+2026-09-18 更新：新的独立内核与迁移契约见 [Agent 架构设计](../../../docs/agent-architecture.md)。Home 的轮次、模型调度、慢思考和动作协调已由 `@realtime-agent/agent` 的 Agent 统一管理；能力执行位于 `server/agent-environment.ts`，人格、存储与 UI 指标通过宿主策略和事件接入。所有说话通过慢模型提议 → Jev 采纳并选择 speak → 输出执行器；原生音频只渲染获准原文并校验转写；下文中的节奏与领域行为仍保留。
+
 ## 行为闭环
 
 ```text

@@ -10,17 +10,35 @@ function context() {
 }
 function response() {
   const c = context();
-  return { answers: { action: { type: 'choice', choice: 'drink', confidence: 0.81, probabilities: Object.fromEntries(Object.keys(c.candidates).map(key => [key, key === 'drink' ? 0.9 : 0.1 / (Object.keys(c.candidates).length - 1)])) }, interrupt: { type: 'noul', noul: 0.7 }, think: { type: 'noul', noul: 0.2 }, request_complete: { type: 'noul', noul: 0 }, accept_reflection: { type: 'choice', choice: 'reject', confidence: 0.9, probabilities: { accept: 0.1, reject: 0.9 } } } };
+  return { answers: { speech: { type: 'choice', choice: 'silent' }, action: { type: 'choice', choice: 'drink', confidence: 0.81, probabilities: Object.fromEntries(Object.keys(c.candidates).map(key => [key, key === 'drink' ? 0.9 : 0.1 / (Object.keys(c.candidates).length - 1)])) }, interrupt: { type: 'noul', noul: 0.7 }, think: { type: 'noul', noul: 0.2 }, request_complete: { type: 'noul', noul: 0 }, accept_reflection: { type: 'choice', choice: 'reject', confidence: 0.9, probabilities: { accept: 0.1, reject: 0.9 } } } };
 }
 const signal = () => new AbortController().signal;
 const fetchFixture = (body: unknown): typeof fetch => async () => Response.json(body);
 
 describe('Jev official HTTP contract', () => {
+  it('uses the Cloudflare account run envelope, one bearer token and the same strict Jev decisions', async () => {
+    const endpoint = 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run';
+    const fetcher: typeof fetch = async (url, init) => {
+      expect(url).toBe(endpoint);
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer cf-test-token');
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe('typesafe/jev');
+      expect(body.state).toBeUndefined(); expect(body.input.questions.action.type).toBe('choice');
+      expect(body.input.state.agent).toBeTruthy(); expect(JSON.stringify(body)).not.toContain('cf-test-token');
+      const result = { ...response(), model: 'jev-fixture', usage: { input_tokens: 12, output_tokens: 8 } };
+      return Response.json({ success: true, result: { state: 'Completed', result, gatewayMetadata: { keySource: 'Unified' } }, errors: [] });
+    };
+    const result = await new JevProvider('cf-test-token', 'typesafe/jev', fetcher, endpoint).decide(context(), signal());
+    expect(result.action).toBe('drink'); expect(result.receipt).toMatchObject({ status: 200, model: 'jev-fixture', inputTokens: 12 });
+    const invalid = response(); invalid.answers.action.choice = 'teleport';
+    await expect(new JevProvider('cf-test-token', 'typesafe/jev', fetchFixture({ success: true, result: { state: 'Completed', result: invalid } }), endpoint).decide(context(), signal())).rejects.toThrow('SDK 校验');
+    await expect(new JevProvider('cf-test-token', 'typesafe/jev', fetchFixture({ success: false, errors: [{ message: 'echo-cf-secret' }] }), endpoint).decide(context(), signal())).rejects.toThrow(ProviderError);
+  });
   it('uses an explicit reflection verdict and validates its full distribution', async () => {
     const valid = response(); valid.answers.accept_reflection = { type: 'choice', choice: 'accept', confidence: 0.55, probabilities: { accept: 0.6, reject: 0.4 } };
     expect((await new JevProvider('test', undefined, fetchFixture(valid)).decide(context(), signal())).acceptReflection).toBe(1);
     valid.answers.accept_reflection.probabilities.reject = 0.8;
-    await expect(new JevProvider('test', undefined, fetchFixture(valid)).decide(context(), signal())).rejects.toThrow('反思评估分布');
+    await expect(new JevProvider('test', undefined, fetchFixture(valid)).decide(context(), signal())).rejects.toThrow('SDK 校验');
   });
   it('uses /v1/systemone with criteria maps and distinguishes confidence from probability', async () => {
     const fetcher: typeof fetch = async (url, init) => {
@@ -45,7 +63,7 @@ describe('Jev official HTTP contract', () => {
     await expect(new JevProvider('test', undefined, fetchFixture(invalid)).decide(context(), signal())).rejects.toThrow(ProviderError);
   });
   it('rejects wrong typed primitives', async () => {
-    await expect(new JevProvider('test', undefined, fetchFixture({ answers: { action: 'drink' } })).decide(context(), signal())).rejects.toThrow('类型校验');
+    await expect(new JevProvider('test', undefined, fetchFixture({ answers: { action: 'drink' } })).decide(context(), signal())).rejects.toThrow('SDK 校验');
   });
   it('handles rate limits without exposing provider bodies and retains retry delay', async () => {
     const fetcher: typeof fetch = async () => new Response('echoed-secret', { status: 429, headers: { 'retry-after': '12' } });
@@ -54,11 +72,27 @@ describe('Jev official HTTP contract', () => {
   });
   it('rejects oversized model responses', async () => {
     const fetcher: typeof fetch = async () => new Response('x'.repeat(140000));
-    await expect(new JevProvider('test', undefined, fetcher).decide(context(), signal())).rejects.toThrow('响应过大');
+    await expect(new JevProvider('test', undefined, fetcher).decide(context(), signal())).rejects.toThrow(ProviderError);
   });
 });
 
 describe('slow thinker contract', () => {
+  it('calls Cloudflare chat completions with the shared token and parses raw or enveloped advice', async () => {
+    const base = 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1';
+    for (const wrapped of [false, true]) {
+      const fetcher: typeof fetch = async (url, init) => {
+        expect(url).toBe(`${base}/chat/completions`);
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer cf-test-token');
+        const body = JSON.parse(String(init?.body));
+        expect(body.model).toBe('openai/gpt-4.1-mini'); expect(body.max_tokens).toBe(1400);
+        expect(body.thinking).toBeUndefined(); expect(body.max_completion_tokens).toBeUndefined();
+        const result = { choices: [{ message: { content: JSON.stringify({ summary: '聊聊生活', reply: '我喜欢安静地看书。', memories: [], suggestedActions: [] }) } }] };
+        return Response.json(wrapped ? { success: true, result } : result);
+      };
+      const result = await new LanguageModelProvider(base, 'cf-test-token', 'openai/gpt-4.1-mini', fetcher).reflect(context(), signal());
+      expect(result.reply).toBe('我喜欢安静地看书。'); expect(result.suggestedActions).toEqual([]);
+    }
+  });
   it('separates Jev runtime controls from slow action proposals and still rejects controls in returned advice', async () => {
     const runtime = new AgentRuntime({ mode: 'demo', fast: new DemoFastProvider(), slow: null });
     runtime.message('专注工作'); await runtime.decide();

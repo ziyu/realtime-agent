@@ -23,8 +23,8 @@ export class VoiceError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const eventSchema = z.object({
-  type: z.enum(['speech-start', 'speech-end', 'input', 'reply', 'interrupt']),
-  sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  type: z.enum(['speech-start', 'speech-end', 'input', 'reply', 'interrupt', 'generating', 'playback-started', 'playback-blocked']),
+  sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   itemId: z.string().min(1).max(160).optional(), text: z.string().trim().min(1).max(2400).optional(),
   source: z.enum(['text', 'voice']).optional(),
 }).strict().superRefine((event, ctx) => {
@@ -52,8 +52,9 @@ export class VoiceGateway {
     if (this.lease) throw new VoiceError(409, '已有一个实时通话，请先在原页面结束。');
     if (epoch !== this.runtime.state.epoch) throw new VoiceError(409, '家园已重置，请重新连接。');
     if (this.runtime.state.paused) throw new VoiceError(409, '请先继续世界，再开始通话。');
-    if (this.runtime.state.mode !== 'live') throw new VoiceError(409, '原生语音需要 Jev 真实模式，请配置 SYSTEM_ONE_API_KEY。');
-    const profile = this.catalog().profiles.find(p => p.id === profileId)!;
+    if (this.runtime.state.mode !== 'live') throw new VoiceError(409, '原生语音需要真实模型模式，请配置 Cloudflare 账户与 API Token。');
+    const profile = this.catalog().profiles.find(p => p.id === profileId);
+    if (!profile) throw new VoiceError(409, '此模型不在当前凭据方案中，请使用 Cloudflare 语音方案。');
     if (!profile.configured) throw new VoiceError(503, `尚未配置：${profile.missing.join('、')}。请修改根目录 .env 并重启服务。`);
     const id = randomUUID(), token = randomBytes(32).toString('hex');
     const expiresAt = this.now() + 15 * 60 * 1000;
@@ -61,7 +62,7 @@ export class VoiceGateway {
     const lease: Lease = { id, token, epoch, profile, bridge, controller: new AbortController(), touchedAt: this.now() };
     this.lease = lease;
     this.runtime.setNativeVoice(true);
-    const instructions = voiceInstructions(this.runtime, profileId === 'livekit-duplex');
+    const instructions = voiceInstructions();
     const startupDeadline = setTimeout(() => lease.controller.abort(), 20000);
     startupDeadline.unref();
     try {
@@ -73,7 +74,7 @@ export class VoiceGateway {
           method: 'POST', headers: { Authorization: `Bearer ${this.config.openaiKey}`, 'Content-Type': 'application/json' }, signal, redirect: 'error',
           body: JSON.stringify({ expires_after: { anchor: 'created_at', seconds: 60 }, session: {
             type: 'realtime', model: profile.model, instructions,
-            audio: { input: { transcription: { model: 'gpt-4o-mini-transcribe', language: 'zh' }, noise_reduction: { type: 'near_field' }, turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true } }, output: { voice: profile.voice } },
+            audio: { input: { transcription: { model: 'gpt-4o-mini-transcribe', language: 'zh' }, noise_reduction: { type: 'near_field' }, turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: false, interrupt_response: true } }, output: { voice: profile.voice } },
           } }),
         });
         if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new VoiceError(502, `OpenAI 实时会话返回 HTTP ${response.status}，请检查账号权限、密钥和额度。`); }
@@ -92,6 +93,9 @@ export class VoiceGateway {
         const data = z.object({ value: z.string().startsWith('ek_').max(4096) }).safeParse(JSON.parse(text));
         if (!data.success) throw new VoiceError(502, 'OpenAI 实时临时凭据格式不正确。');
         backend = { connection: { kind: 'openai', ephemeralKey: data.data.value }, async interrupt() {}, async sendText() {}, async close() {} };
+      } else if (profileId === 'cloudflare-grok') {
+        const { startCloudflareVoice } = await import('./cloudflare');
+        backend = await startCloudflareVoice(profile, bridge, instructions, this.config, signal);
       } else {
         const { startLiveKit } = await import('./livekit');
         backend = await startLiveKit(profile, bridge, instructions, this.config, signal);
@@ -146,8 +150,21 @@ export class VoiceGateway {
           const { sequence } = z.object({ sequence: z.number().int().nonnegative() }).strict().parse(req.body);
           res.json(await lease.bridge.observe(sequence, lease.controller.signal)); return;
         }
+        if (action === 'output-plan') {
+          const { sequence } = z.object({ sequence: z.number().int().nonnegative() }).strict().parse(req.body);
+          const disconnected = new AbortController();
+          const cancel = () => { if (!res.writableFinished) disconnected.abort(); };
+          res.on('close', cancel);
+          try { res.json(await lease.bridge.outputPlan(sequence, AbortSignal.any([lease.controller.signal, disconnected.signal]))); }
+          finally { res.off('close', cancel); }
+          return;
+        }
+        if (action === 'approve-output') {
+          const { sequence, id, transcript } = z.object({ sequence: z.number().int().nonnegative(), id: z.string().min(1).max(160), transcript: z.string().max(2400).optional() }).strict().parse(req.body);
+          res.json({ approved: lease.bridge.approveOutput(id, sequence, transcript) }); return;
+        }
         if (action === 'interrupt') {
-          lease.bridge.event({ type: 'interrupt', sequence: Math.max(1, lease.bridge.state.sequence) });
+          lease.bridge.event({ type: 'interrupt', sequence: lease.bridge.state.sequence });
           await lease.backend?.interrupt(); res.json({ ok: true }); return;
         }
         if (action === 'text' && lease.profile.id !== 'openai-webrtc') {

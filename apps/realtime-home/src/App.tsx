@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Activity, ArrowDown, ArrowRight, ArrowUp, BookOpen, Brain, Check, ChevronRight, CircleHelp, Clock3, Coffee, Download, Droplets, Expand, Heart, House, Leaf, LoaderCircle, MessageCircle, Mic, Minus, Pause, Play, Plus, RotateCcw, Settings2, Sparkles, Sun, Terminal, Volume2, VolumeX, WifiOff, X, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ACTIONS, ACTION_IDS, ROOM_NAMES, roomAt } from '../shared/world';
+import { TARGETS, isMovement, ACTIONS, ACTION_IDS, ROOM_NAMES, roomAt } from '../shared/world';
 import type { ActionId, InputSource, Memory, MessageReceipt, ModelReceipt, Need, WorldState } from '../shared/types';
 import { createHome } from './scene';
 import { sendApi, useWorld } from './useWorld';
 import { MemoryPanel, MindGlance, MindPanel } from './MindPanel';
 import { useVoiceConversation } from './useVoiceConversation';
+import { TurnDebugger } from './TurnDebugger';
 import { VoiceControls } from './VoiceControls';
 import './realtime.css';
 
@@ -85,8 +86,11 @@ export function App() {
   const listening = realtimeVoice.active;
   const turn = world?.turns.find(t => t.id === world.intent?.id);
   const action = world?.agent.action;
+  const actionObject = action ? TARGETS[isMovement(action.id) ? action.target! : action.id as ActionId].object : null;
+  const actionLabel = action ? isMovement(action.id) ? `${action.id === 'inspect' ? '查看' : '走向'}${actionObject}` : ACTIONS[action.id].label : null;
+  const actionVerb = action ? isMovement(action.id) ? `前往${actionObject}${action.id === 'inspect' ? '查看' : ''}` : ACTIONS[action.id].verb : null;
   const local = world?.mode !== 'live';
-  const status = !connected ? world ? '连接中断' : '连接中' : world?.paused ? '已暂停' : world?.attending ? world.error ? '保留现场，等待连接恢复' : '听到你了，正在调整' : action?.phase === 'walking' ? `前往${ACTIONS[action.id].object}` : action ? ACTIONS[action.id].verb : world?.deciding ? '想想接下来做什么' : world?.thinking ? '整理自己的想法' : world?.error ? '等待连接恢复' : world?.mind?.mood.label ?? '安静待一会儿';
+  const status = !connected ? world ? '连接中断' : '连接中' : world?.paused ? '已暂停' : world?.attending ? world.error ? '保留现场，等待连接恢复' : '听到你了，正在调整' : action?.phase === 'walking' ? `前往${actionObject}` : action ? actionVerb : world?.deciding ? '想想接下来做什么' : world?.thinking ? '整理自己的想法' : world?.error ? '等待连接恢复' : world?.mind?.mood.label ?? '安静待一会儿';
   const cadence = !connected ? '等待连接恢复' : world?.paused ? '调度已暂停' : world?.scheduler?.status === 'backoff' ? '模型重试等待中' : '每 1 秒检查一次 · 按需决策';
   const lastMessage = world?.messages.at(-1);
   const simMinutes = Math.floor((9 * 3600 + 41 * 60 + (world?.elapsed ?? 0) * 12) / 60);
@@ -204,9 +208,10 @@ export function App() {
 
         <section className="execution-status" aria-label="行为执行状态" data-testid="execution-status">
           <div className="execution-current"><Activity size={16} /><div><strong>{status}</strong><span data-testid="decision-cadence">{cadence}</span></div></div>
-          <div className="execution-progress">{action ? <><span>{action.phase === 'walking' ? '正在行走，到达后开始交互' : `${ACTIONS[action.id].label} · ${Math.round(action.progress * 100)}%`}</span><progress aria-label="当前动作进度" max={1} value={action.progress} /></> : <span>完成动作后才更新需求与记忆</span>}</div>
+          <div className="execution-progress">{action ? <><span>{action.phase === 'walking' ? `正在行走 · ${actionLabel}` : `${actionLabel} · ${Math.round(action.progress * 100)}%`}</span><progress aria-label="当前动作进度" max={1} value={action.progress} /></> : <span>完成动作后才更新需求与记忆</span>}</div>
           <div className="execution-totals"><strong data-testid="completed-actions">{world?.metrics.completed ?? 0}</strong><span>已完成动作</span></div>
         </section>
+        {world && <TurnDebugger world={world} connected={connected} />}
         {world?.mind && <MindGlance mind={world.mind} onOpen={() => setTab('mind')} />}
         <div className="architecture-heading"><span><Activity size={14} />此刻，两种思考在协作</span><button onClick={() => setTab('thoughts')}>查看决策过程<ArrowRight size={13} /></button></div>
         <div className="systems-grid"><div className={`system-card ${world?.deciding ? 'system-active' : ''}`}><span className="system-icon fast"><Zap size={18} /></span><div><div className="system-title"><strong>快速决策</strong><span>SYSTEM 1</span></div><p>{local ? '本地规则演示' : world?.connected.jevModel} · {world?.deciding ? '正在选择下一步' : '感知、选择、行动'}</p></div><div className="system-stat">{world?.metrics.decisions ?? 0}<small>次决策</small></div></div><div className={`system-card ${world?.thinking ? 'system-active' : ''}`}><span className="system-icon slow"><Brain size={18} /></span><div><div className="system-title"><strong>慢速思考</strong><span>SYSTEM 2</span></div><p>{world?.thinking ? '正在整理想法…' : local ? '模拟建议 · 按需唤醒' : world?.connected.llm ? '语言模型 · 按需唤醒' : '语言模型待连接'}</p></div><div className="system-stat">{world?.metrics.reflections ?? 0}<small>次思考</small></div></div></div>
@@ -255,12 +260,12 @@ export function App() {
     {modal === 'settings' && <Modal title="连接它的思考能力" onClose={() => setModal(null)}>
       <p className="modal-lead">当前为<strong>{local ? '本地规则演示' : 'Jev 实时模式'}</strong>。Jev 选择行为，并按需调用语言模型。</p>
       <div className="connection-list">
-        <div><Zap size={18} /><span>快速决策<small>TypeSafe · {world?.connected.jevModel ?? 'jev-latest'}</small></span><b>{world?.connected.jev ? '已配置' : '未连接'}</b></div>
+        <div><Zap size={18} /><span>快速决策<small>{world?.connected.provider === 'cloudflare' ? 'Cloudflare' : 'TypeSafe'} · {world?.connected.jevModel ?? 'jev-latest'}</small></span><b>{world?.connected.jev ? '已配置' : '未连接'}</b></div>
         <div><Brain size={18} /><span>慢速思考<small>{world?.connected.llmModel || '兼容 Chat Completions 的语言模型'}</small></span><b>{world?.connected.llm ? '已配置' : '未连接'}</b></div>
       </div>
-      <p>配置仓库根目录 <code>.env</code> 后重启服务即可。应用目录的 <code>.env</code> 可以覆盖根配置；旧 <code>TYPESAFE_API_KEY</code> 仍兼容。</p>
-      <pre>{'SYSTEM_ONE_BASE_URL=https://api.typesafe.ai/v1\nSYSTEM_ONE_MODEL=jev-latest\nSYSTEM_ONE_API_KEY=你的 TypeSafe 密钥\nLLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-flash\nLLM_API_KEY=你的语言模型密钥'}</pre>
-      <p className="modal-note">密钥仅由服务端读取。配置 System One 密钥后默认真实运行，AGENT_MODE=demo 可强制演示。连接失败会显示错误；成功响应的模型名、请求 ID 和 token 用量可在思考面板查看。</p>
+      <p>统一使用 Cloudflare：在根目录 <code>.env</code> 填写下面两项，运行 <code>pnpm dev:cloudflare</code>。Jev、文字对话和 Grok 实时语音共用这一个账户 Token，本地音频房间自动启动。</p>
+      <pre>{'CLOUDFLARE_ACCOUNT_ID=你的账户 ID\nCLOUDFLARE_API_TOKEN=你的 API Token'}</pre>
+      <p className="modal-note">Token 需要 Account → Workers AI → Read 权限，账户需有 AI Gateway 预付余额。请使用 API Token，不是 Global API Key。凭据只留在服务端；“已配置”表示读取到了配置，实际连接结果会显示在运行记录中。</p>
       <button className="primary-button modal-done" onClick={() => setModal(null)}>回到家园<ArrowRight size={15} /></button>
     </Modal>}
     {modal === 'about' && <Modal title="一个关于实时行为的小实验" onClose={() => setModal(null)}><div className="about-symbol"><Activity size={34} /></div><p className="modal-lead">Milo 住在一个有真实状态的小世界里。它会口渴、会疲惫，也会在你的指令到来时重新考虑正在做的事。</p><div className="about-step"><Zap size={19} /><p><strong>快系统负责每一个行为</strong><span>Jev 从可执行动作中选择下一步，也决定是否需要中断当前动作、是否唤醒慢思考。</span></p></div><div className="about-step"><Brain size={19} /><p><strong>慢系统整理更长远的想法</strong><span>语言模型提供计划、对话和记忆建议。返回的计划仍需经过快系统选择，才能变为行动。</span></p></div><div className="about-step"><House size={19} /><p><strong>世界决定事情有没有完成</strong><span>角色需要走到物体旁边、执行完动作，才会获得效果。中断和过期的结果不会被当成成功。</span></p></div><p className="modal-note">这是单机共享世界 Demo，时间与天气均为模拟。语音功能使用浏览器能力，支持情况取决于浏览器。</p></Modal>}

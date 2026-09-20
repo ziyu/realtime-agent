@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { apiBaseUrl, chatCompletionEndpoint, chatCompletionOptions, loadRuntimeConfig, loadVoiceConfig, systemOneEndpoint } from '../src/index.ts';
+import { apiBaseUrl, chatCompletionEndpoint, chatCompletionOptions, cloudflareAiBase, cloudflareResult, isCloudflareAiUrl, loadRuntimeConfig, loadVoiceConfig } from '../src/index.ts';
 
 function fixture(rootEnv: string, appEnv = '') {
   mkdirSync('test-results', { recursive: true });
@@ -44,10 +44,7 @@ test('explicit empty app key masks root credentials and live without a key is re
   } finally { f.dispose(); }
 });
 
-test('normalizes configured endpoints without appending duplicate routes', () => {
-  assert.equal(systemOneEndpoint('https://api.typesafe.ai'), 'https://api.typesafe.ai/v1/systemone');
-  assert.equal(systemOneEndpoint('https://api.typesafe.ai/v1/'), 'https://api.typesafe.ai/v1/systemone');
-  assert.equal(systemOneEndpoint('https://example.com/v1/systemone'), 'https://example.com/v1/systemone');
+test('normalizes chat-completion endpoints without appending duplicate routes', () => {
   assert.equal(chatCompletionEndpoint('https://api.deepseek.com/'), 'https://api.deepseek.com/chat/completions');
   assert.equal(chatCompletionEndpoint('https://example.com/v1/chat/completions'), 'https://example.com/v1/chat/completions');
 });
@@ -62,6 +59,54 @@ test('invalid URLs fail without echoing credentials', () => {
   for (const value of ['http://remote.example', 'https://user:secret-value@example.com', 'https://example.com?key=secret-value', 'bad-secret-value']) {
     assert.throws(() => apiBaseUrl(value), error => error instanceof Error && !error.message.includes('secret-value'));
   }
+});
+
+const cfAccount = '0123456789abcdef0123456789abcdef';
+test('one Cloudflare token configures Jev, the text model and voice despite existing vendor credentials', () => {
+  const f = fixture(`CLOUDFLARE_ACCOUNT_ID=${cfAccount}\nCLOUDFLARE_API_TOKEN=cf-fixture\nSYSTEM_ONE_API_KEY=old-jev\nSYSTEM_ONE_BASE_URL=https://api.typesafe.ai/v1\nLLM_API_KEY=old-llm\nLLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-flash\nOPENAI_API_KEY=old-openai`);
+  try {
+    const environment = {};
+    const c = loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment });
+    const voice = loadVoiceConfig({ appDirectory: f.appDirectory, environment });
+    assert.equal(c.mode, 'live'); assert.equal(c.provider, 'cloudflare');
+    assert.deepEqual(c.systemOne, { apiKey: 'cf-fixture', model: 'typesafe/jev', baseUrl: `${cloudflareAiBase(cfAccount)}/run` });
+    assert.equal(c.llm.apiKey, 'cf-fixture'); assert.equal(c.llm.model, 'openai/gpt-4.1-mini');
+    assert.equal(chatCompletionEndpoint(c.llm.baseUrl), `${cloudflareAiBase(cfAccount)}/v1/chat/completions`);
+    assert.equal(voice.cloudflare?.apiToken, 'cf-fixture'); assert.equal(voice.openaiKey, ''); assert.equal(voice.xaiKey, '');
+    assert.deepEqual(voice.livekit, { url: 'ws://127.0.0.1:7880', apiKey: 'devkey', apiSecret: 'secret' });
+    assert.deepEqual(environment, {});
+  } finally { f.dispose(); }
+});
+
+test('Cloudflare blank overrides and incomplete configuration fail without falling back to vendor credentials', () => {
+  const f = fixture(`CLOUDFLARE_ACCOUNT_ID=${cfAccount}\nCLOUDFLARE_API_TOKEN=cf-fixture\nSYSTEM_ONE_API_KEY=old-jev`, 'CLOUDFLARE_API_TOKEN=');
+  try {
+    assert.throws(() => loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment: {} }), /CLOUDFLARE_API_TOKEN/);
+    assert.equal(loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment: { AI_PROVIDER: 'direct' } }).systemOne.apiKey, 'old-jev');
+    assert.equal(loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment: { AGENT_MODE: 'demo' } }).mode, 'demo');
+    assert.throws(() => loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment: { CLOUDFLARE_ACCOUNT_ID: 'secret-invalid-account' } }), error => error instanceof Error && !error.message.includes('secret-invalid-account'));
+  } finally { f.dispose(); }
+});
+
+test('Cloudflare aliases respect layer precedence and explicit room blanks never receive development secrets', () => {
+  const f = fixture(`CLOUDFLARE_ACCOUNT_ID=${cfAccount}\nCLOUDFLARE_API_TOKEN=root-token`, 'CLOUDFLARE_API_KEY=app-token\nLIVEKIT_URL=');
+  try {
+    const c = loadRuntimeConfig({ appDirectory: f.appDirectory, defaultPort: 3102, environment: { CLOUDFLARE_LLM_MODEL: 'google/gemini-3-flash' } });
+    assert.equal(c.systemOne.apiKey, 'app-token'); assert.equal(c.llm.model, 'google/gemini-3-flash');
+    const voice = loadVoiceConfig({ appDirectory: f.appDirectory, environment: {} });
+    assert.deepEqual(voice.livekit, { url: '', apiKey: '', apiSecret: '' });
+  } finally { f.dispose(); }
+});
+
+test('Cloudflare wire envelopes are normalized without weakening direct endpoints or exposing error bodies', () => {
+  const url = `${cloudflareAiBase(cfAccount)}/run`;
+  assert.equal(isCloudflareAiUrl(url.replace('api.cloudflare.com', 'api.cloudflare.com.example')), false);
+  assert.deepEqual(chatCompletionOptions(`${cloudflareAiBase(cfAccount)}/v1`), { max_tokens: 1400 });
+  assert.deepEqual(cloudflareResult({ success: true, result: { answers: {} }, errors: [] }), { answers: {} });
+  assert.deepEqual(cloudflareResult({ success: true, result: { state: 'Completed', result: { answers: {} }, gatewayMetadata: { keySource: 'Unified' } }, errors: [] }), { answers: {} });
+  assert.deepEqual(cloudflareResult({ answers: {} }), { answers: {} });
+  assert.throws(() => cloudflareResult({ success: true, result: { state: 'Failed', result: { message: 'echo-secret' } }, errors: [] }), error => error instanceof Error && !error.message.includes('echo-secret'));
+  assert.throws(() => cloudflareResult({ success: false, errors: [{ message: 'echo-secret' }] }), error => error instanceof Error && !error.message.includes('echo-secret'));
 });
 
 test('voice credentials remain separate from text keys and honor explicit blank overrides', () => {

@@ -123,7 +123,7 @@ describe('real-time turns', () => {
   });
 
   it('records accepted conversational latency against its own turn, and keeps old replies out after replacement', async () => {
-    const runtime = fixture({ decide: async () => decision({ action: 'idle', think: 1, acceptReflection: 1 }) }, {
+    const runtime = fixture({ decide: async ({ state }) => decision({ action: 'idle', think: state.reflection ? 0 : 1, acceptReflection: 1, speech: state.reflection ? `speak:${state.reflection.id}` : 'silent' }) }, {
       reflect: async () => ({ summary: '聊天', reply: '我喜欢照顾绿植。', memories: [], suggestedActions: [] }),
     });
     runtime.start(); const receipt = runtime.message('你喜欢什么？');
@@ -132,7 +132,7 @@ describe('real-time turns', () => {
     const reply = runtime.state.messages.find(m => m.role === 'agent' && m.turnId === receipt.turnId);
     expect(reply?.text).toBe('我喜欢照顾绿植。');
     expect(runtime.state.metrics.started).toBe(0);
-    const starts = runtime.state.traces.filter(t => t.kind === 'decision').map(t => t.requestedAt!);
+    const starts = runtime.state.traces.filter(t => t.kind === 'decision' && !!t.source).map(t => t.requestedAt!);
     expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(1000);
   });
 });

@@ -64,6 +64,6 @@ test('a planning message invokes simulated slow thinking through the fast system
   await expect.poll(async () => (await (await request.get('/api/state')).json()).reflection?.accepted, { timeout: 20000 }).toBe(true);
   await page.getByRole('tab', { name: '思考', exact: true }).click();
   await expect(page.getByText('模拟慢思考建议', { exact: false }).first()).toBeVisible();
-  await expect(page.getByText('快系统发起慢思考', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('快系统采纳了慢思考建议', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('tabpanel', { name: '思考' }).getByText('快系统发起慢思考', { exact: true })).toBeVisible();
+  await expect(page.getByRole('tabpanel', { name: '思考' }).getByText('快系统采纳了慢思考建议', { exact: true })).toBeVisible();
 });

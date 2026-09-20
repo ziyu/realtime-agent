@@ -13,6 +13,9 @@ importers:
       '@realtime-agent/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@system-one-ai/sdk':
+        specifier: 0.5.2
+        version: 0.5.2
       three:
         specifier: 0.186.0
         version: 0.186.0
@@ -62,9 +65,15 @@ importers:
       '@openai/agents-realtime':
         specifier: 0.18.0
         version: 0.18.0(zod@4.6.5)
+      '@realtime-agent/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
       '@realtime-agent/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@system-one-ai/sdk':
+        specifier: 0.5.2
+        version: 0.5.2
       dotenv:
         specifier: ^17.2.3
         version: 17.4.2
@@ -89,6 +98,9 @@ importers:
       three:
         specifier: 0.186.0
         version: 0.186.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: ^4.3.6
         version: 4.6.5
@@ -132,9 +144,21 @@ importers:
       vitest:
         specifier: 5.0.1
         version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@24.13.5)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(tsx@4.23.13))
-      ws:
-        specifier: 8.21.0
-        version: 8.21.0
+
+  packages/agent:
+    devDependencies:
+      '@system-one-ai/sdk':
+        specifier: 0.5.2
+        version: 0.5.2
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.5
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/config:
     devDependencies:
@@ -1184,6 +1208,10 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@system-one-ai/sdk@0.5.2':
+    resolution: {integrity: sha512-/CEprA0wFwJOq9/xcq8PY63taoI+FiRuWGtHOHZ66By/H9MZx2OPCX2k5jxjDDnuzSjkARGLQ+EDx2iC6wLlMA==}
+    engines: {node: '>=20'}
 
   '@tweenjs/tween.js@23.1.3':
     resolution: {integrity: sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA==}
@@ -3462,6 +3490,8 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@system-one-ai/sdk@0.5.2': {}
 
   '@tweenjs/tween.js@23.1.3': {}
 

@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import { loadVoiceConfig } from '@realtime-agent/config';
 import { voiceCatalog } from './server/voice/profiles';
 
-const profile = voiceCatalog(loadVoiceConfig({ appDirectory: process.cwd() })).profiles.find(item => item.id === (process.env.VOICE_TEST_PROFILE || 'openai-webrtc'));
+const catalog = voiceCatalog(loadVoiceConfig({ appDirectory: process.cwd() }));
+const profile = catalog.profiles.find(item => item.id === (process.env.VOICE_TEST_PROFILE || catalog.defaultProfile));
 if (!profile) throw new Error('VOICE_TEST_PROFILE must name an available native voice profile.');
 if (!profile.configured) throw new Error(`Native API test needs: ${profile.missing.join(', ')}. No model calls were started.`);
 const wav = process.env.VOICE_TEST_AUDIO && resolve(process.env.VOICE_TEST_AUDIO);

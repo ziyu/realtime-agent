@@ -7,15 +7,20 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n world,web \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
-    "build": "tsc --noEmit && vite build",
-    "start": "tsx server/index.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "dev": "pnpm run build:agent && concurrently -k -n world,web \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev:cloudflare": "tsx server/cloudflare-dev.ts",
+    "build:agent": "pnpm --filter @realtime-agent/agent run build",
+    "build": "pnpm run build:agent && tsc --noEmit && vite build",
+    "start": "pnpm run build:agent && tsx server/index.ts",
+    "typecheck": "pnpm run build:agent && tsc --noEmit",
+    "test": "pnpm run build:agent && vitest run",
+    "test:agent-live": "pnpm run build:agent && tsx scripts/verify-agent-live.ts",
+    "test:controlled-live": "playwright test --config playwright.controlled-live.config.ts",
     "test:e2e": "playwright test",
     "test:live": "playwright test --config playwright.live.config.ts",
     "test:native": "playwright test --config playwright.native.config.ts",
     "test:livekit": "playwright test --config playwright.livekit.config.ts",
+    "test:cloudflare": "playwright test --config playwright.cloudflare.config.ts",
     "test:voice-api": "playwright test --config playwright.voice-api.config.ts"
   },
   "dependencies": {
@@ -26,7 +31,9 @@
     "@livekit/agents-plugin-xai": "1.9.0",
     "@livekit/rtc-node": "0.13.35",
     "@openai/agents-realtime": "0.18.0",
+    "@realtime-agent/agent": "workspace:*",
     "@realtime-agent/config": "workspace:*",
+    "@system-one-ai/sdk": "0.5.2",
     "dotenv": "^17.2.3",
     "express": "5.2.1",
     "livekit-client": "2.22.3",
@@ -35,6 +42,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "three": "0.186.0",
+    "ws": "8.21.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -50,7 +58,6 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "8.3.0",
-    "vitest": "5.0.1",
-    "ws": "8.21.0"
+    "vitest": "5.0.1"
   }
 }

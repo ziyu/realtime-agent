@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import type { WorldState } from '../../shared/types';
 
 test.beforeEach(async ({ request }) => {
@@ -53,6 +54,43 @@ test('a slow HTTP delivery does not block a newer message or erase a newly typed
     expect(world.intent?.text).toBe('去喝水');
     expect(world.messages.filter(m => m.role === 'user').map(m => m.text)).toEqual(['去喝水']);
   } finally { release(); }
+});
+
+test('kitchen inspection answers once and exposes an exportable per-turn loop on desktop and mobile', async ({ page, request }) => {
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: '给 Milo 发消息' });
+  await input.fill('走到厨房去看有啥东西'); await input.press('Enter');
+  await expect.poll(async () => (await (await request.get('/api/state')).json()).intent?.observation?.target).toBe('kitchen');
+  const walking = await (await request.get('/api/state')).json() as WorldState;
+  expect(walking.agent.action?.phase).toBe('walking');
+  expect(walking.messages.some(m => m.turnId === walking.intent!.id && m.role === 'agent')).toBe(false);
+  const debug = page.getByTestId('turn-debugger');
+  await expect(debug).toContainText('等待抵达厨房取得观察');
+  await expect(page.getByRole('log', { name: '聊天记录' })).toContainText('厨房里有料理台、饮水台、水槽。');
+  const arrived = await (await request.get('/api/state')).json() as WorldState;
+  expect(arrived.outcomes.some(o => o.requestId === walking.intent!.id && o.action === 'inspect' && o.target === 'kitchen')).toBe(true);
+  expect(arrived.messages.filter(m => m.role === 'user')).toHaveLength(1);
+  await expect(debug).toContainText('已交付');
+  await expect(debug).toContainText('控制器已采纳决策');
+  await debug.screenshot({ path: 'test-results/debug-desktop.png' });
+  await input.fill('停下'); await input.press('Enter');
+  await expect(debug).toContainText('“停下”');
+  await page.getByRole('combobox', { name: '调试轮次' }).selectOption(walking.intent!.id);
+  await expect(debug).toContainText('“走到厨房去看有啥东西”');
+  await expect(debug).not.toContainText('“停下”');
+  await debug.getByText(/查看这轮的.*条事件与结构化数据/).click();
+  await expect(debug).toContainText('观察结果已就绪');
+  const downloaded = page.waitForEvent('download');
+  await debug.getByRole('button', { name: '导出这一轮' }).click();
+  const artifact = await downloaded;
+  const exported = JSON.parse(await readFile((await artifact.path())!, 'utf8'));
+  expect(exported.turn.id).toBe(walking.intent!.id);
+  expect(exported.traces.every((t: { turnId: string }) => t.turnId === exported.turn.id)).toBe(true);
+  expect(exported.speechReceipts).toContainEqual(expect.objectContaining({ status: 'completed', call: expect.objectContaining({ capability: 'speak' }) }));
+  expect(exported.receipts.every((r: { scope: { turnId: string } }) => r.scope.turnId === exported.turn.id)).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await debug.screenshot({ path: 'test-results/debug-mobile.png' });
 });
 
 test('continuous speech final results auto-send and speech onset cancels the previous reply', async ({ page, request }) => {

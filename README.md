@@ -1,5 +1,9 @@
 # RealtimeAgent
 
+**独立 Agent 内核：**新架构见 [Agent 架构设计](docs/agent-architecture.md)，包位于 [packages/agent](packages/agent/README.md)。Home 已接入完整协调器，统一管理轮次、决策、慢思考与执行；人格和持久化通过宿主策略接入。原生行动/外观播报先由真实回执生成文本，再校验音频转写后播放，普通聊天获批后仍可流式输出。核心可以脱离 3D 页面运行，Jev 使用 `@system-one-ai/sdk@0.5.2`。
+
+**Cloudflare 统一凭据入口：**根目录 `.env` 只需填写 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`，运行 `pnpm dev:cloudflare`。Jev、文字模型和 Grok 实时语音统一走 Cloudflare，本地音频房间自动启动，无需申请其他模型密钥。Token 权限、账户余额和验证范围见 [Cloudflare 启动说明](docs/cloudflare.md)。下面的原厂配置仍作为可选路径保留。
+
 实时 3D Agent 家园实验，以 **pnpm monorepo** 管理。Jev 负责即时行为选择并决定是否调用 LLM，语言模型提供对话、计划与记忆建议，服务端世界负责动作执行和结果验证。
 
 默认 Home 中的 Milo 有持续的性格、兴趣、心情和自己的小愿望。实际经历会影响兴趣与愿望进度；Jev 可以在没有用户指令时邀请 LLM 回顾生活，形成带来源的随记。打开“内心”面板可以查看，也可以关闭主动分享，让它安静生活。
@@ -31,6 +35,7 @@ realtime-agent/
 ├── apps/
 │   ├── realtime-home/        # @realtime-agent/home
 │   └── realtime-demo/        # @realtime-agent/demo
+├── packages/agent/          # 独立协调器、执行回执、感知证据与输出许可
 ├── packages/config/         # 服务端环境加载与模型端点配置
 └── docs/
 ```
