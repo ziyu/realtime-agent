@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>任务工作台</title><link rel="stylesheet" href="/style.css"></head>
+<body class="workspace-body">
+  <main class="workbench">
+    <header><span class="eyebrow">WORKSPACE / 本地任务环境</span><h1>记录一件事</h1><p>填写资料并保存，保存结果会显示在右侧。</p></header>
+    <div class="workbench-grid">
+      <form id="record-form" data-document="" data-layout="0" data-saving="false">
+        <div id="fields">
+          <label data-field="name">姓名<input data-agent-target="name" data-version="0" name="name" maxlength="80" required autocomplete="off"></label>
+          <label data-field="category">分类<select data-agent-target="category" data-version="0" name="category"><option value="life">生活</option><option value="work">工作</option></select></label>
+          <label data-field="note">备注<textarea data-agent-target="note" data-version="0" name="note" maxlength="400" rows="5"></textarea></label>
+        </div>
+        <button data-agent-target="save" data-version="0" type="submit">保存记录</button>
+        <p id="save-status" role="status">尚未保存</p>
+      </form>
+      <section class="saved-panel" aria-label="保存结果"><h2>已保存的记录</h2><p>这里显示已实际提交的内容。</p><dl id="saved" data-version="0"><dt>姓名</dt><dd data-saved="name">—</dd><dt>分类</dt><dd data-saved="category">—</dd><dt>备注</dt><dd data-saved="note">—</dd></dl></section>
+    </div>
+    <footer class="scenario-tools"><span>环境事件</span><button type="button" data-scenario="popup">出现弹窗</button><button type="button" data-scenario="shuffle">移动字段</button><button type="button" data-scenario="slow">切换慢保存</button><span id="speed-status">普通保存</span></footer>
+  </main>
+  <dialog id="notice"><h2>工作台提示</h2><p>处理这条提示后可以继续填写。</p><button type="button" data-agent-target="dismiss" data-version="0">知道了，继续</button></dialog>
+  <script src="/workspace.js" defer></script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 import type { MindState, SelfInsight } from './mind';
 import type { ActionReceipt } from '@realtime-agent/agent';
+import type { ChannelDecisionContext, ChannelSnapshot, Selection, TimingSample } from '@realtime-agent/agent';
+import type { PresentationState } from './presentation';
 
 export type Vec2 = { x: number; z: number };
 export type ActionId = 'relax' | 'eat' | 'drink' | 'sleep' | 'read' | 'work' | 'water' | 'wash';
@@ -92,6 +94,7 @@ export interface Reflection {
   executionEvidenceIds?: string[];
 }
 export interface Decision {
+  channels?: Record<string, Selection>;
   speech?: string;
   action: Choice;
   target?: TargetId | null;
@@ -130,6 +133,9 @@ export interface DecisionScheduler {
   status: 'waiting' | 'deciding' | 'executing' | 'thinking' | 'backoff' | 'paused';
 }
 export interface WorldState {
+  presentation?: PresentationState;
+  channels?: Record<string, ChannelSnapshot>;
+  timings?: TimingSample[];
   execution?: ActionReceipt | null;
   executions?: ActionReceipt[];
   speechExecution?: ActionReceipt | null;
@@ -163,6 +169,7 @@ export interface WorldState {
   metrics: { decisions: number; jevCalls: number; llmCalls: number; reflections: number; started: number; completed: number; interrupted: number; discarded: number };
 }
 export interface DecisionContext {
+  channels?: Record<string, ChannelDecisionContext>;
   state: WorldState;
   candidates: Partial<Record<Choice, string>>;
   observedAt?: number;

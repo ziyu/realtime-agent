@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SystemOne } from '@system-one-ai/sdk';
 import { cloudflareAdapter } from '@system-one-ai/sdk/adapters/cloudflare';
-import { AgentError } from '../src/index.js';
+import { Agent, AgentError } from '../src/index.js';
 import { SystemOneDecisionPolicy } from '../src/system-one.js';
 import { deferred, room } from './fixture.js';
 
@@ -78,4 +78,42 @@ test('the SDK speech choice binds a snapshotted output call alongside the body c
   const result = wire(candidates.map(c => c.id));
   response.resolve(Response.json({ ...result, answers: { ...result.answers, speech: { type: 'choice', choice: 'speak:proposal-1' } } }));
   assert.deepEqual((await pending).decision.output, { kind: 'execute', call: { capability: 'speak', target: 'proposal-1', input: { text: 'Hello.' } } });
+});
+
+test('one SDK evaluation selects complete operations for multiple independent channels', async () => {
+  const candidates = room().candidates(); let calls = 0;
+  const channels = {
+    computer: { candidates: [
+      { id: 'wait', description: 'Wait', selection: { kind: 'wait' as const } },
+      { id: 'fill', description: 'Fill the exact approved name', selection: { kind: 'execute' as const, call: { capability: 'fill', target: 'name', input: { value: 'Lin' } } } },
+    ] },
+    face: { candidates: [
+      { id: 'neutral', description: 'Relaxed', selection: { kind: 'wait' as const } },
+      { id: 'listen', description: 'Attentive', selection: { kind: 'execute' as const, call: { capability: 'express', target: 'attentive' } } },
+    ] },
+  };
+  const policy = new SystemOneDecisionPolicy(new SystemOne({ apiKey: null, fetch: async (_url, init) => {
+    calls++; const questions = JSON.parse(String(init?.body)).questions;
+    assert.equal(questions.channel_computer.criteria.fill, 'Fill the exact approved name');
+    assert.equal(questions.channel_face.criteria.listen, 'Attentive');
+    const response = wire(candidates.map(candidate => candidate.id));
+    return Response.json({ ...response, answers: { ...response.answers,
+      channel_computer: { type: 'choice', choice: 'fill' }, channel_face: { type: 'choice', choice: 'listen' } } });
+  } }));
+  const result = await policy.evaluate({ state: {}, candidates, channels }, new AbortController().signal);
+  assert.equal(calls, 1);
+  assert.deepEqual(result.decision.channels, { computer: channels.computer.candidates[1].selection, face: channels.face.candidates[1].selection });
+});
+
+test('the Agent decision event retains returned model usage without response headers or credentials', async () => {
+  const f = room(); let metadata: unknown;
+  const policy = new SystemOneDecisionPolicy(new SystemOne({ apiKey: 'fixture-private-key', fetch: async () =>
+    Response.json(wire(f.candidates().map(c => c.id)), { headers: { 'x-request-id': 'request-1', 'set-cookie': 'private-cookie' } }),
+  }));
+  const agent = new Agent({ environment: f.environment, fast: policy });
+  agent.subscribe(event => { if (event.type === 'decision-resolved') metadata = event.result.metadata; });
+  agent.receive('Move'); await agent.decide();
+  assert.equal((metadata as { model: string }).model, 'jev-1.13.0');
+  assert.deepEqual((metadata as { usage: unknown }).usage, { inputTokens: 200, outputTokens: 80 });
+  assert.equal(JSON.stringify(metadata).includes('private'), false); agent.dispose();
 });

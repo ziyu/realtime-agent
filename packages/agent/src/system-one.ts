@@ -1,7 +1,7 @@
 import { APIError, ResponseValidationError, SystemOneError, booleanQuestion, choice } from '@system-one-ai/sdk';
 import type { EvaluationClient, State } from '@system-one-ai/sdk';
 import { AgentError, candidateSnapshot, jsonCopy } from './common.js';
-import type { Candidate, DecisionContext, DecisionPolicy, DecisionResult, JsonValue } from './types.js';
+import type { Candidate, DecisionContext, DecisionPolicy, DecisionResult, JsonValue, Selection } from './types.js';
 
 export interface DecisionInstructions { action: string; interrupt: string; think: string; complete: string; review: string }
 const defaults: DecisionInstructions = {
@@ -46,16 +46,32 @@ export class SystemOneDecisionPolicy implements DecisionPolicy {
   }
 
   async decide(context: DecisionContext, signal: AbortSignal): Promise<DecisionResult> {
-    return (await this.evaluate({ state: jsonCopy(context) as unknown as JsonValue, candidates: context.candidates, ...(context.outputCandidates?.length ? { output: { instructions: 'Select an offered output action. Speaking requires an available proposal; accepting a proposal alone does not speak. Continue the current output or choose silent when nothing new should be said.', candidates: context.outputCandidates } } : {}) }, signal)).decision;
+    const result = await this.evaluate({ state: jsonCopy(context) as unknown as JsonValue, candidates: context.candidates,
+      ...(context.channels ? { channels: Object.fromEntries(Object.entries(context.channels).map(([name, channel]) => [name, { candidates: channel.candidates }])) } : {}),
+      ...(context.outputCandidates?.length ? { output: { instructions: 'Select an offered output action. Speaking requires an available proposal; accepting a proposal alone does not speak. Continue the current output or choose silent when nothing new should be said.', candidates: context.outputCandidates } } : {}) }, signal);
+    return { ...result.decision, metadata: {
+      source: 'system-one', model: result.model, status: result.status, durationMs: result.durationMs,
+      ...(result.requestId === undefined ? {} : { requestId: result.requestId }),
+      usage: { inputTokens: result.inputTokens ?? null, outputTokens: result.outputTokens ?? null },
+    } };
   }
 
   async evaluate(input: { state: JsonValue; candidates: readonly Candidate[]; instructions?: Partial<DecisionInstructions>;
     output?: { instructions: string; candidates: readonly Candidate[] };
+    channels?: Record<string, { instructions?: string; candidates: readonly Candidate[] }>;
     speech?: { instructions: string; choices: Record<string, string> } }, signal: AbortSignal): Promise<SystemOneDecision> {
     const candidates = candidateSnapshot(input.candidates);
     const outputs = input.output ? candidateSnapshot(input.output.candidates) : [];
     const instructions = { ...defaults, ...this.options.instructions, ...input.instructions };
     const criteria = Object.fromEntries(candidates.map(candidate => [candidate.id, candidate.description]));
+    const channels = Object.entries(input.channels ?? {}).map(([name, channel]) => {
+      if (!/^[a-z][a-z0-9_-]{0,63}$/.test(name)) throw new AgentError('invalid_channel', 'Invalid channel name.');
+      return { name, candidates: candidateSnapshot(channel.candidates), instructions: channel.instructions };
+    });
+    if (channels.length > 16) throw new AgentError('invalid_channel', 'At most 16 decision channels are supported.');
+    const channelQuestions = Object.fromEntries(channels.map(channel => [`channel_${channel.name}`,
+      choice(channel.instructions ?? `Select one available action for the ${channel.name} channel. Continue compatible active work. Waiting cancels this channel. A dispatched or unknown device operation is not completed.`,
+        Object.fromEntries(channel.candidates.map(candidate => [candidate.id, candidate.description])))])) as Record<`channel_${string}`, ReturnType<typeof choice>>;
     try {
       const questions = {
         action: choice(instructions.action, criteria),
@@ -63,6 +79,7 @@ export class SystemOneDecisionPolicy implements DecisionPolicy {
         think: booleanQuestion(instructions.think),
         request_complete: booleanQuestion(instructions.complete),
         accept_reflection: choice(instructions.review, { accept: 'Relevant pending proposal supported by current evidence.', reject: 'Absent, stale, contradictory or unsupported proposal.' }),
+        ...channelQuestions,
       };
       const state = jsonCopy(input.state) as State, request = { signal, timeoutMs: this.timeout, maxRetries: 0 };
       const speech = input.output ? { instructions: input.output.instructions, choices: Object.fromEntries(outputs.map(c => [c.id, c.description])) } : input.speech;
@@ -76,9 +93,16 @@ export class SystemOneDecisionPolicy implements DecisionPolicy {
       const output = speechChoice && outputs.find(c => c.id === speechChoice);
       if (input.output && !output) throw new AgentError('invalid_output_candidate', 'The model selected an unavailable output action.');
       const reviewAccepted = a.accept_reflection.choice === 'accept';
+      const selections: Record<string, Selection> = Object.fromEntries(channels.map(channel => {
+        const answer = (a as unknown as Record<string, { choice?: unknown }>)[`channel_${channel.name}`];
+        const selected = channel.candidates.find(candidate => candidate.id === answer?.choice);
+        if (!selected) throw new AgentError('invalid_channel_candidate', 'The model selected an unavailable channel action.');
+        return [channel.name, structuredClone(selected.selection)];
+      }));
       return {
         decision: { selection: structuredClone(selected.selection), ...(output ? { output: structuredClone(output.selection) } : {}), interrupt: a.interrupt.probability >= this.thresholds.interrupt,
-          think: a.think.probability >= this.thresholds.think, complete: a.request_complete.probability >= this.thresholds.complete, acceptProposal: reviewAccepted },
+          think: a.think.probability >= this.thresholds.think, complete: a.request_complete.probability >= this.thresholds.complete, acceptProposal: reviewAccepted,
+          ...(channels.length ? { channels: selections } : {}) },
         candidateId: selected.id, confidence: a.action.confidence ?? null, probabilities: { ...a.action.probabilities },
         interruptProbability: a.interrupt.probability, thinkProbability: a.think.probability, completeProbability: a.request_complete.probability,
         reviewAccepted, model: result.model, status: result.response.status, requestId: result.response.requestId,

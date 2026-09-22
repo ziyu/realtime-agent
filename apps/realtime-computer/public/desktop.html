@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Realtime Agent · Windows 桌面</title>
+  <link rel="stylesheet" href="/desktop.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">REALTIME AGENT / COMPUTER</span>
+        <h1>直接操作这台电脑。</h1>
+        <p id="mode-copy">正在连接真实 Windows 桌面…</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="status-pill" id="connection-status" data-tone="waiting">连接中</span>
+        <a class="ghost-link" href="/api/trace" download="computer-trace.json">导出轨迹</a>
+      </div>
+    </header>
+
+    <section class="task-card" aria-labelledby="task-heading">
+      <div class="task-copy">
+        <span class="section-kicker">任务</span>
+        <h2 id="task-heading">告诉 Agent 你想在电脑上完成什么</h2>
+        <p id="goal-help">连接模型后，可以直接描述任务；所有实际输入仍通过同一桌面执行回执。</p>
+      </div>
+      <form id="goal-form" class="goal-form">
+        <label class="sr-only" for="goal-text">自然语言任务</label>
+        <textarea id="goal-text" name="text" rows="2" maxlength="4000" aria-describedby="start-hint" placeholder="例如：在所选记事本窗口中写下今天的待办"></textarea>
+        <div class="goal-actions">
+          <span id="task-status" class="task-state">尚未开始任务</span>
+          <div>
+            <button type="button" class="button secondary" id="stop">请求停止</button>
+            <button type="submit" class="button primary" id="start-goal">开始任务</button>
+          </div>
+        </div>
+        <p id="start-hint" class="feedback">正在检查连接和操作窗口…</p>
+        <p id="task-progress" class="feedback" role="status" aria-live="polite" data-phase="idle">尚未开始任务。</p>
+      </form>
+    </section>
+
+    <section class="workspace-grid">
+      <section class="screen-card" aria-labelledby="desktop-heading">
+        <div class="screen-heading">
+          <div>
+            <span class="section-kicker">真实画面</span>
+            <h2 id="desktop-heading">Windows 桌面</h2>
+          </div>
+          <div class="screen-meta">
+            <span id="capture-label">等待首帧</span>
+            <span id="pointer-label">未选择操作位置</span>
+          </div>
+        </div>
+
+        <div class="window-toolbar">
+          <label for="window-select">观察范围</label>
+          <select id="window-select" aria-label="观察窗口">
+            <option value="">整个桌面</option>
+          </select>
+          <button type="button" class="button secondary compact" id="focus-window">聚焦窗口</button>
+          <span id="foreground-label" class="window-note">前台窗口：—</span>
+        </div>
+
+        <div class="screen-stage" id="screen-stage">
+          <img id="screen" alt="这台 Windows 电脑的真实桌面画面">
+          <span id="screen-empty">正在读取真实桌面…</span>
+          <span id="pointer-marker" aria-hidden="true"></span>
+        </div>
+        <p class="screen-hint" id="screen-hint">选择一个窗口后，可直接在画面上点击。坐标按截图响应中的物理桌面边界映射。</p>
+      </section>
+
+      <aside class="control-card" aria-labelledby="manual-heading">
+        <div class="control-heading">
+          <div>
+            <span class="section-kicker">手动控制</span>
+            <h2 id="manual-heading">发送真实输入</h2>
+          </div>
+          <span class="manual-badge" id="manual-badge">需选择窗口</span>
+        </div>
+
+        <section class="control-section">
+          <h3>鼠标</h3>
+          <div class="segmented" role="group" aria-label="点击方式">
+            <button type="button" data-click-mode="left" aria-pressed="true">单击</button>
+            <button type="button" data-click-mode="double" aria-pressed="false">双击</button>
+            <button type="button" data-click-mode="right" aria-pressed="false">右键</button>
+          </div>
+          <div class="button-row">
+            <button type="button" class="button secondary" id="scroll-up">向上滚动</button>
+            <button type="button" class="button secondary" id="scroll-down">向下滚动</button>
+          </div>
+        </section>
+
+        <section class="control-section">
+          <h3>键盘</h3>
+          <form id="type-form" class="type-form">
+            <label for="type-text">输入文字</label>
+            <textarea id="type-text" rows="3" maxlength="2000" placeholder="输入后发送到已选择的前台窗口"></textarea>
+            <button type="submit" class="button primary">输入文本</button>
+          </form>
+          <div class="key-grid" aria-label="常用按键">
+            <button type="button" data-keys="CTRL,A">Ctrl + A</button>
+            <button type="button" data-keys="ENTER">Enter</button>
+            <button type="button" data-keys="TAB">Tab</button>
+            <button type="button" data-keys="ESC">Esc</button>
+          </div>
+        </section>
+
+        <section class="control-section compact-section">
+          <h3>执行状态</h3>
+          <p id="command-feedback" class="feedback">选择窗口后即可手动操作；所有命令都会等待执行回执。</p>
+          <button type="button" class="button secondary full" id="reconcile">核对未决结果</button>
+        </section>
+      </aside>
+    </section>
+
+    <section class="history-card" aria-labelledby="history-heading">
+      <div class="history-heading">
+        <div>
+          <span class="section-kicker">操作记录</span>
+          <h2 id="history-heading">最近发生了什么</h2>
+        </div>
+        <span id="history-count">0 条</span>
+      </div>
+      <div id="history" class="history-list"><p class="empty-copy">还没有执行记录。</p></div>
+    </section>
+
+    <details class="diagnostics-card">
+      <summary>诊断信息</summary>
+      <div class="diagnostics-grid">
+        <div><h3>桌面观察</h3><pre id="diagnostic-observation">等待状态…</pre></div>
+        <div><h3>Agent / 指标</h3><pre id="diagnostic-agent">等待状态…</pre></div>
+      </div>
+    </details>
+
+    <p id="error" class="error-banner" role="alert" hidden></p>
+  </main>
+  <script src="/desktop.js" defer></script>
+</body>
+</html>

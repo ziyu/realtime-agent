@@ -9,8 +9,7 @@ export type ModelProvider = 'direct' | 'cloudflare';
 export const LOCAL_VOICE_ROOM = { url: 'ws://127.0.0.1:7880', apiKey: 'devkey', apiSecret: 'secret' } as const;
 
 function environmentReader(options: { appDirectory: string; environment?: Environment }) {
-  const app = resolve(options.appDirectory);
-  const layers = [options.environment ?? process.env, readEnvironment(join(app, '.env')), readEnvironment(join(workspaceRoot(app), '.env'))];
+  const layers = [options.environment ?? process.env, ...runtimeConfigFiles(options.appDirectory).map(readEnvironment)];
   return (...names: string[]): string | undefined => {
     for (const layer of layers) for (const name of names) if (layer[name] !== undefined) return layer[name]!.trim();
     return undefined;
@@ -74,6 +73,12 @@ function workspaceRoot(appDirectory: string): string {
     if (parent === current) throw new Error('Cannot locate pnpm-workspace.yaml for this application.');
     current = parent;
   }
+}
+
+/** The same ordered paths used by the loader; safe to display without reading credential values. */
+export function runtimeConfigFiles(appDirectory: string): string[] {
+  const app = resolve(appDirectory);
+  return [join(app, '.env'), join(workspaceRoot(app), '.env')];
 }
 
 function readEnvironment(file: string): Environment {

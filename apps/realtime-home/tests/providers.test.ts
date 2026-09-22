@@ -3,6 +3,8 @@ import { JevProvider, LanguageModelProvider, ProviderError } from '../server/pro
 import { AgentRuntime } from '../server/runtime';
 import { DemoFastProvider } from '../server/providers';
 import { candidatesFor } from '../shared/world';
+import { presentationChannels } from '../server/presentation';
+import type { DecisionContext } from '../shared/types';
 
 function context() {
   const runtime = new AgentRuntime({ mode: 'demo', fast: new DemoFastProvider(), slow: null });
@@ -14,6 +16,16 @@ function response() {
 }
 const signal = () => new AbortController().signal;
 const fetchFixture = (body: unknown): typeof fetch => async () => Response.json(body);
+const choiceAnswer = (ids: string[], selected: string) => ({ type: 'choice', choice: selected, confidence: 1,
+  probabilities: Object.fromEntries(ids.map(id => [id, id === selected ? 1 : 0])) });
+
+function contextWithPresentation(): DecisionContext {
+  const c = context();
+  const channels = Object.fromEntries(presentationChannels(Date.now).map(channel => [channel.id, {
+    mode: channel.mode, blocksCompletion: channel.blocksCompletion !== false, current: null, receipts: [], candidates: channel.candidates(c.state),
+  }]));
+  return { ...c, channels };
+}
 
 describe('Jev official HTTP contract', () => {
   it('uses the Cloudflare account run envelope, one bearer token and the same strict Jev decisions', async () => {
@@ -55,6 +67,20 @@ describe('Jev official HTTP contract', () => {
     };
     const result = await new JevProvider('test-only', 'jev-latest', fetcher).decide(context(), signal());
     expect(result.action).toBe('drink'); expect(result.confidence).toBe(0.81); expect(result.probabilities.drink).toBe(0.9);
+  });
+  it('sends face and gaze as Jev choice questions and returns their executable selections', async () => {
+    const c = contextWithPresentation();
+    const faceIds = c.channels!.face.candidates.map(candidate => candidate.id), gazeIds = c.channels!.gaze.candidates.map(candidate => candidate.id);
+    const fetcher: typeof fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.questions.channel_face.criteria.attentive).toContain('专注倾听');
+      expect(body.questions.channel_gaze.criteria.speaker).toContain('说话者');
+      return Response.json({ ...response(), answers: { ...response().answers,
+        channel_face: choiceAnswer(faceIds, 'attentive'), channel_gaze: choiceAnswer(gazeIds, 'speaker') } });
+    };
+    const result = await new JevProvider('test-only', 'jev-latest', fetcher).decide(c, signal());
+    expect(result.channels?.face).toEqual({ kind: 'execute', call: { capability: 'express', target: 'attentive' } });
+    expect(result.channels?.gaze).toEqual({ kind: 'execute', call: { capability: 'look', target: 'speaker' } });
   });
   it('rejects nonexistent actions and invalid probability distributions', async () => {
     const unknown = response(); unknown.answers.action.choice = 'teleport';

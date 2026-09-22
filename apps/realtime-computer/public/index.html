@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Realtime Agent · 电脑任务</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<main class="shell">
+  <header class="masthead"><div><span class="eyebrow">REALTIME AGENT / COMPUTER</span><h1>边行动，边理解。</h1><p>在真实浏览器里完成任务，随时修改目标或停止。</p></div><span class="mode" id="mode">正在连接</span></header>
+  <div class="dashboard">
+    <aside class="control-panel">
+      <h2>这次要保存什么？</h2><p class="muted">目标会形成短计划，每一步经过选择、执行和核对。</p>
+      <form id="goal-form"><label>姓名<input name="name" value="林晓" maxlength="80" required></label><label>分类<select name="category"><option value="work">工作</option><option value="life">生活</option></select></label><label>备注<textarea name="note" maxlength="400" rows="4">今天完成复核</textarea></label><button type="submit">开始 / 更新目标</button></form>
+      <div class="secondary-actions"><button class="secondary" id="stop" type="button">立即停止</button><button class="secondary" id="reconcile" type="button">核对未决操作</button></div>
+      <div class="agent-status"><div class="avatar-face" id="avatar" data-expression="neutral"><i></i><i></i></div><div><strong id="status">等待任务</strong><p id="status-detail" class="muted">填写目标后开始。</p></div></div>
+      <p id="error" role="alert" class="error"></p>
+    </aside>
+    <section class="screen-panel"><div class="section-heading"><h2>正在操作的浏览器</h2><span class="muted">实时画面</span></div><div class="screen-frame"><img id="screen" src="/api/screen" alt="Agent 当前正在操作的实际浏览器画面"></div><div class="scenario-tools"><span>试试环境变化</span><button type="button" data-scenario="popup">弹窗</button><button type="button" data-scenario="shuffle">字段移动</button><button type="button" data-scenario="slow">慢保存</button></div></section>
+  </div>
+  <section class="diagnostics"><div><h2>目标与计划</h2><p id="goal-status" class="muted">尚未创建目标</p><ol id="steps"></ol></div><div><h2>执行回执</h2><p class="muted">取消请求和实际结果分别记录。</p><div id="receipts"></div></div><div><h2>链路指标</h2><dl id="metrics"></dl><p class="muted">这里显示本地样本，不能代表模型性能基准。</p><a href="/api/trace" download="computer-trace.json">导出本次轨迹</a></div></section>
+  <footer class="page-footer">参考环境只操作本机任务工作台。当前会话的目标和执行记录保存在内存中。</footer>
+</main><script src="/monitor.js" defer></script>
+</body>
+</html>

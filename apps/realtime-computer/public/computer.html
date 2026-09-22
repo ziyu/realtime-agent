@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Realtime Agent · Computer Use</title>
+  <link rel="stylesheet" href="/computer.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">REALTIME AGENT / COMPUTER USE</span>
+        <h1>让 Agent 操作电脑</h1>
+        <p id="mode-copy">正在连接 Cua Driver 和真实桌面…</p>
+      </div>
+      <div class="top-actions">
+        <span class="status-pill perception-pill" id="perception-status" data-tone="waiting">读取感知能力</span>
+        <span class="status-pill" id="connection-status" data-tone="waiting">连接中</span>
+        <a class="trace-link" href="/api/trace" download="computer-trace.json">导出轨迹</a>
+      </div>
+    </header>
+
+    <section class="goal-card" aria-labelledby="goal-heading">
+      <div class="goal-copy">
+        <span class="section-label">自然语言任务</span>
+        <h2 id="goal-heading">描述最终想完成的事情</h2>
+        <p>Agent 按目标发现应用、切换窗口并核对结果。执行过程取决于实际应用、权限与现场状态；窗口选择只影响预览，不限制任务范围。</p>
+      </div>
+      <form id="goal-form" class="goal-form">
+        <label class="sr-only" for="goal-text">电脑任务</label>
+        <textarea id="goal-text" maxlength="4000" rows="3" placeholder="例如：打开记事本，写下今天的待办，保存到桌面，并确认文件已经保存"></textarea>
+        <div class="goal-footer">
+          <div class="goal-state">
+            <strong id="task-status">尚未开始任务</strong>
+            <span id="progress-status" data-phase="idle">等待任务</span>
+            <span id="verification-status" hidden></span>
+          </div>
+          <div class="goal-buttons">
+            <button type="button" class="button secondary" id="resume">继续</button>
+            <button type="button" class="button danger" id="stop">停止</button>
+            <button type="submit" class="button primary" id="start-goal">开始任务</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="workspace">
+      <section class="screen-card" aria-labelledby="screen-heading">
+        <div class="screen-header">
+          <div>
+            <span class="section-label">真实桌面</span>
+            <h2 id="screen-heading">当前画面</h2>
+          </div>
+          <div class="screen-meta">
+            <span id="capture-meta">等待首帧</span>
+            <span id="pointer-meta">—</span>
+          </div>
+        </div>
+
+        <div class="view-toolbar">
+          <label for="view-select">仅查看</label>
+          <select id="view-select" aria-label="截图预览范围">
+            <option value="">整个桌面</option>
+          </select>
+          <span id="active-window">当前活动窗口：—</span>
+        </div>
+
+        <div class="screen-stage" id="screen-stage">
+          <img id="screen" alt="Cua Driver 捕获的真实电脑画面">
+          <span id="screen-empty">正在读取桌面…</span>
+          <span id="click-marker" aria-hidden="true"></span>
+        </div>
+        <p class="screen-note">预览默认是整个桌面。点击画面会按原始截图像素发送一次手动点击，并接管正在运行的自动任务。</p>
+      </section>
+
+      <aside class="manual-card" aria-labelledby="manual-heading">
+        <div class="manual-heading">
+          <div>
+            <span class="section-label">手动接管</span>
+            <h2 id="manual-heading">直接发送输入</h2>
+          </div>
+          <span id="manual-state" class="manual-state">可接管</span>
+        </div>
+
+        <section class="control-group">
+          <h3>文字</h3>
+          <form id="type-form">
+            <label class="sr-only" for="type-text">输入文字</label>
+            <textarea id="type-text" maxlength="2000" rows="4" placeholder="输入文字到后端最新观察到的活动窗口"></textarea>
+            <button type="submit" class="button primary full">输入文本</button>
+          </form>
+        </section>
+
+        <section class="control-group">
+          <h3>按键</h3>
+          <div class="key-grid">
+            <button type="button" data-keys="CTRL,A">Ctrl + A</button>
+            <button type="button" data-keys="ENTER">Enter</button>
+            <button type="button" data-keys="TAB">Tab</button>
+            <button type="button" data-keys="ESC">Esc</button>
+          </div>
+        </section>
+
+        <section class="control-group">
+          <h3>滚动</h3>
+          <div class="scroll-grid">
+            <button type="button" class="button secondary" id="scroll-up">向上滚动</button>
+            <button type="button" class="button secondary" id="scroll-down">向下滚动</button>
+          </div>
+          <p class="manual-help" id="manual-help">点击画面选择滚动位置；未选择时使用当前截图中心。文字和按键由后端按最新观察到的活动窗口显式定位，与预览选择无关。</p>
+        </section>
+
+        <section class="control-group result-group">
+          <h3>执行反馈</h3>
+          <p id="input-feedback" class="input-feedback">手动操作会先停止后续自动决策，并等待已经发出的 native 操作真实收敛（最长约 10 秒）后再发送，通过同一执行回执记录结果。</p>
+        </section>
+      </aside>
+    </section>
+
+    <section class="history-card" aria-labelledby="history-heading">
+      <div class="history-header">
+        <div>
+          <span class="section-label">操作记录</span>
+          <h2 id="history-heading">任务与执行时间线</h2>
+        </div>
+        <span id="history-count">0 条</span>
+      </div>
+      <div id="history" class="history-list"><p class="empty">还没有操作记录。</p></div>
+    </section>
+
+    <details class="diagnostics">
+      <summary>驱动与诊断信息</summary>
+      <div class="diagnostics-grid">
+        <div><h3>Cua Driver</h3><pre id="driver-diagnostics">等待状态…</pre></div>
+        <div><h3>当前观察</h3><pre id="observation-diagnostics">等待状态…</pre></div>
+      </div>
+    </details>
+
+    <div id="error-banner" class="error-banner" role="alert" hidden>
+      <span id="error-text"></span>
+      <button type="button" id="dismiss-error" aria-label="关闭错误">×</button>
+    </div>
+  </main>
+  <script src="/computer.js" defer></script>
+</body>
+</html>

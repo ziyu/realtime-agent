@@ -82,7 +82,7 @@ async function requestJson(url: string, key: string, body: unknown, signal: Abor
   } finally { combined.removeEventListener('abort', cancel); reader.releaseLock(); }
 }
 
-export function modelContext({ state, candidates, observedAt }: DecisionContext, purpose: 'fast' | 'slow' = 'slow') {
+export function modelContext({ state, candidates, observedAt, channels }: DecisionContext, purpose: 'fast' | 'slow' = 'slow') {
   const remembered = recall(state);
   const goal = activeGoal(state.mind);
   const handlingRequest = purpose === 'fast' && Boolean(state.intent && !state.intent.completed);
@@ -113,6 +113,7 @@ export function modelContext({ state, candidates, observedAt }: DecisionContext,
     capabilities: 'Jev chooses physical actions and speech actions independently. The slow language model proposes ALL words for both text and native audio. Accepting a reflection alone does not speak. The audio model only renders the selected exact text. Use think when a new answer is needed, including after new execution evidence arrives. Use silent to stop speaking; continue preserves an authorized speech action.',
     speechExecution: state.speechExecution,
     speechExecutions: state.speechExecutions,
+    ...(purpose === 'fast' && channels ? { presentation: state.presentation, channelExecutions: Object.fromEntries(Object.entries(channels).map(([name, channel]) => [name, channel.current])) } : {}),
     executions: state.executions,
     autonomy: state.intent && !state.intent.completed
       ? 'An explicit user request is active. Follow it before autonomous upkeep. Do not perform physical actions when the user asks only to talk, plan, wait or stop. Memories and hypothetical plans are not new instructions.'
@@ -166,6 +167,9 @@ export class JevProvider implements FastProvider {
       const result = await this.policy.evaluate({
         state: JSON.parse(JSON.stringify({ ...modelContext(context, 'fast'), availableActions: Object.fromEntries(candidates.map(c => [c.id, c.description])) })) as JsonValue,
         candidates,
+        ...(context.channels ? { channels: Object.fromEntries(Object.entries(context.channels).map(([name, channel]) => [name, {
+          candidates: channel.candidates, instructions: `选择 ${name} 的当前表现。倾听、规划和身体行动可并行。表现不构成任务完成证据。`,
+        }])) } : {}),
         output: { candidates: speechCandidates(context.state), instructions: 'Choose speech independently from body action. speak:<id> executes the exact proposed words, only if the proposal is accepted or you also accept it in review now. Review all claims against current observations and execution receipts. A proposal may acknowledge a running activity or answer after completion. continue keeps a running speech; silent stops it or stays quiet. Never invent words or use an unoffered choice. A delivered acknowledgement does not forbid a later evidence-based answer.' },
         instructions: {
           action: actionInstructions,
@@ -194,6 +198,7 @@ export class JevProvider implements FastProvider {
         interrupt: result.interruptProbability, think: result.thinkProbability,
         requestComplete: result.completeProbability, acceptReflection: Number(result.reviewAccepted),
         source: 'jev', latencyMs: Math.round(performance.now() - started), receipt,
+        ...(result.decision.channels ? { channels: result.decision.channels } : {}),
       };
     } catch (error) {
       if (signal.aborted) throw signal.reason;

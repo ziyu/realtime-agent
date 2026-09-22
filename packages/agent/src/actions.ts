@@ -1,13 +1,17 @@
 import { AgentError, copyCall, defaultId, jsonCopy, positive } from './common.js';
+import { ResourceArbiter } from './resources.js';
+import type { ResourceLease } from './resources.js';
 import type { ActionCall, ActionReceipt, Capability, ExecutionContext, PreparedAction, Scope } from './types.js';
 
-interface Active<C> { receipt: ActionReceipt; prepared: PreparedAction<C>; controller: AbortController }
+interface Active<C> { receipt: ActionReceipt; prepared: PreparedAction<C>; controller: AbortController; lease: ResourceLease }
 export interface ActionRuntimeOptions<C> {
   capabilities: readonly Capability<C>[];
   now?: () => number;
   id?: () => string;
   maxExecutionSeconds?: number;
   historyLimit?: number;
+  resources?: readonly string[];
+  arbiter?: ResourceArbiter;
 }
 
 /** Environment-owned effects, with a single authoritative execution lifecycle. */
@@ -19,11 +23,15 @@ export class ActionRuntime<C> {
   private id: () => string;
   private maxSeconds: number;
   private limit: number;
+  private arbiter: ResourceArbiter;
+  private resources: readonly string[];
 
   constructor(options: ActionRuntimeOptions<C>) {
     this.now = options.now ?? Date.now; this.id = options.id ?? defaultId;
     this.maxSeconds = positive(options.maxExecutionSeconds ?? 120, 'maxExecutionSeconds');
     this.limit = Math.floor(positive(options.historyLimit ?? 64, 'historyLimit'));
+    this.arbiter = options.arbiter ?? new ResourceArbiter(); this.resources = options.resources ?? [];
+    this.arbiter.available(this.resources);
     if (this.limit < 1 || this.limit > 10000) throw new AgentError('configuration', 'historyLimit must be between 1 and 10000.');
     for (const capability of options.capabilities) {
       if (!capability.id || this.capabilities.has(capability.id)) throw new AgentError('duplicate_capability', 'Capability IDs must be unique.');
@@ -33,6 +41,15 @@ export class ActionRuntime<C> {
 
   get current(): ActionReceipt | null { return this.active ? structuredClone(this.active.receipt) : null; }
   get history(): ActionReceipt[] { return structuredClone(this.records); }
+  available(): boolean { return this.arbiter.available(this.resources, this.active?.lease); }
+  validate(call: ActionCall, context: C): void {
+    const detached = copyCall(call), capability = this.capabilities.get(detached.capability);
+    if (!capability) throw new AgentError('unknown_capability', 'This capability is not registered.');
+    try {
+      const prepared = capability.prepare(detached, context);
+      if (!prepared || typeof prepared.step !== 'function') throw new Error('Expected a synchronous executor.');
+    } catch { throw new AgentError('prepare_failed', 'The requested action is no longer available.'); }
+  }
   private execution(active: Active<C>): ExecutionContext {
     return { id: active.receipt.id, scope: { ...active.receipt.scope }, signal: active.controller.signal };
   }
@@ -47,10 +64,11 @@ export class ActionRuntime<C> {
     try { prepared = capability.prepare(detached, context); }
     catch { throw new AgentError('prepare_failed', 'The requested action is no longer available.'); }
     if (!prepared || typeof prepared.step !== 'function') throw new AgentError('invalid_capability', 'A capability must return a step executor.');
+    if (!this.available()) throw new AgentError('resource_busy', 'A required device resource is still in use.', 0);
     this.cancel(context, 'replaced');
-    const now = this.now();
-    const active: Active<C> = { prepared, controller: new AbortController(), receipt: {
-      id: this.id(), scope: { ...scope }, call: detached, status: 'running', phase: prepared.phase ?? 'executing',
+    const now = this.now(), id = this.id();
+    const active: Active<C> = { prepared, controller: new AbortController(), lease: this.arbiter.acquire(id, this.resources), receipt: {
+      id, scope: { ...scope }, call: detached, status: 'running', phase: prepared.phase ?? 'executing',
       progress: 0, elapsedSeconds: 0, startedAt: now, updatedAt: now,
     } };
     this.active = active;
@@ -80,6 +98,7 @@ export class ActionRuntime<C> {
     if (reason) active.receipt.reason = reason;
     const receipt = structuredClone(active.receipt);
     this.records.push(receipt); this.records = this.records.slice(-this.limit);
+    this.arbiter.release(active.lease);
     this.active = null;
     return structuredClone(receipt);
   }

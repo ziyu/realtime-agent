@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { TARGETS, isMovement, ACTIONS, WALLS } from '../shared/world';
 import type { ActionId, ActionSpec, WorldState } from '../shared/types';
+import { expressionLabels } from '../shared/presentation';
 
 export function createHome(container: HTMLElement, onSelect: (id: ActionId) => void, onError: (message: string) => void) {
   const scene = new THREE.Scene();
@@ -134,10 +135,13 @@ export function createHome(container: HTMLElement, onSelect: (id: ActionId) => v
   const avatar = new THREE.Group(); scene.add(avatar);
   const torso = new THREE.Group(); avatar.add(torso);
   box(torso, 0.48, 0.52, 0.35, '#749280', 0, 0.8, 0, true);
-  box(torso, 0.52, 0.45, 0.43, '#f7f5ea', 0, 1.3, 0, true);
-  box(torso, 0.4, 0.2, 0.025, '#344f48', 0, 1.31, 0.22, true);
-  for (const x of [-0.11, 0.11]) sphere(torso, 0.04, '#dcf2b4', x, 1.32, 0.25);
-  cylinder(torso, 0.025, 0.025, 0.17, '#69806c', 0, 1.59, 0); sphere(torso, 0.055, '#dfb166', 0, 1.7, 0);
+  const head = new THREE.Group(); head.position.y = 1.3; torso.add(head);
+  box(head, 0.52, 0.45, 0.43, '#f7f5ea', 0, 0, 0, true);
+  box(head, 0.4, 0.2, 0.025, '#344f48', 0, 0.01, 0.22, true);
+  const eyes = [-0.11, 0.11].map(x => sphere(head, 0.04, '#dcf2b4', x, 0.025, 0.25));
+  const brows = [-0.11, 0.11].map(x => box(head, 0.075, 0.012, 0.014, '#dcf2b4', x, 0.092, 0.248, true));
+  const mouth = box(head, 0.065, 0.012, 0.012, '#dcf2b4', 0, -0.052, 0.246, true);
+  cylinder(head, 0.025, 0.025, 0.17, '#69806c', 0, 0.29, 0); sphere(head, 0.055, '#dfb166', 0, 0.4, 0);
   const arms = [-1, 1].map(side => {
     const arm = new THREE.Group(); arm.position.set(side * 0.33, 0.97, 0); torso.add(arm);
     box(arm, 0.14, 0.36, 0.16, '#f1eee2', 0, -0.17, 0, true); return arm;
@@ -217,6 +221,34 @@ export function createHome(container: HTMLElement, onSelect: (id: ActionId) => v
         arms[1].rotation.x = ['water', 'drink', 'wash'].includes(id) ? -0.8 + Math.sin(time / 220) * 0.25 : -0.2;
         if (id === 'sleep' || id === 'relax') torso.position.y -= 0.12;
       }
+      // Continuous animation renders an already selected intent; no model calls occur on animation frames.
+      const expression = world.presentation?.expression ?? 'neutral', gaze = world.presentation?.gaze ?? 'forward';
+      const listening = expression === 'attentive', thinking = expression === 'thinking', pleased = expression === 'pleased';
+      const speaking = world.speech?.phase === 'playing';
+      let headYaw = 0;
+      if (gaze === 'speaker') {
+        const angle = Math.atan2(camera.position.x - avatar.position.x, camera.position.z - avatar.position.z) - avatar.rotation.y;
+        headYaw = THREE.MathUtils.clamp(Math.atan2(Math.sin(angle), Math.cos(angle)), -0.85, 0.85);
+      } else if (gaze === 'activity' && world.agent.action) {
+        const target = isMovement(world.agent.action.id) ? world.agent.action.target : world.agent.action.id;
+        if (target) {
+          const point = TARGETS[target].destination, angle = Math.atan2(point.x - avatar.position.x, point.z - avatar.position.z) - avatar.rotation.y;
+          headYaw = THREE.MathUtils.clamp(Math.atan2(Math.sin(angle), Math.cos(angle)), -0.85, 0.85);
+        }
+      }
+      const smoothing = 1 - Math.exp(-dt * 9);
+      head.rotation.y += (headYaw - head.rotation.y) * smoothing;
+      head.rotation.x += ((thinking ? -0.08 : listening ? 0.06 : 0) - head.rotation.x) * smoothing;
+      head.rotation.z += ((expression === 'curious' ? 0.13 : thinking ? -0.06 : 0) - head.rotation.z) * smoothing;
+      const blinkPhase = time % 4300, blink = !world.paused && blinkPhase < 140 ? Math.max(.08, Math.abs(blinkPhase - 70) / 70) : 1;
+      for (let i = 0; i < eyes.length; i++) {
+        const eyeHeight = pleased ? .45 : thinking ? .65 : listening ? 1.2 : 1;
+        eyes[i].scale.y += (eyeHeight * blink - eyes[i].scale.y) * Math.min(1, dt * 35);
+        eyes[i].scale.x += ((pleased ? 1.25 : 1) - eyes[i].scale.x) * smoothing;
+        brows[i].rotation.z += (((expression === 'curious' && i === 1 ? .2 : pleased ? (i ? -.12 : .12) : 0)) - brows[i].rotation.z) * smoothing;
+      }
+      mouth.scale.x += ((pleased ? 1.6 : thinking ? .6 : speaking ? 1.2 : 1) - mouth.scale.x) * smoothing;
+      mouth.scale.y += ((speaking ? 1.4 + Math.abs(Math.sin(time / 95)) * 1.8 : 1) - mouth.scale.y) * Math.min(1, dt * 18);
       place(agentLabel, desired.copy(avatar.position).add(new THREE.Vector3(0, 2, 0)));
     }
     for (const item of labels) place(item.element, item.position);
@@ -234,6 +266,9 @@ export function createHome(container: HTMLElement, onSelect: (id: ActionId) => v
       pathLine.geometry = new THREE.BufferGeometry().setFromPoints([state.agent.position, ...(state.agent.action?.path ?? [])].map(p => new THREE.Vector3(p.x, 0.2, p.z)));
       pathLine.computeLineDistances();
       agentLabel.textContent = state.thinking ? 'Milo · 思考中' : state.paused ? 'Milo · 已暂停' : 'Milo';
+      agentLabel.title = expressionLabels[state.presentation?.expression ?? 'neutral'];
+      renderer.domElement.dataset.expression = state.presentation?.expression ?? 'neutral';
+      renderer.domElement.dataset.gaze = state.presentation?.gaze ?? 'forward';
     },
     resetCamera() { camera.position.set(16, 18, 20); camera.zoom = 1; controls.target.set(0, 0, 0); camera.updateProjectionMatrix(); controls.update(); },
     zoom(delta: number) { camera.zoom = THREE.MathUtils.clamp(camera.zoom + delta, 0.7, 2.4); camera.updateProjectionMatrix(); },

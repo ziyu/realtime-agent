@@ -78,7 +78,9 @@ describe('real-time turns', () => {
     expect(signals[0].aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(2200);
     expect(signals).toHaveLength(1);
-    settle(decision({ action: 'sleep' })); await Promise.resolve(); await Promise.resolve();
+    expect(runtime.state.scheduler.status).toBe('deciding');
+    settle(decision({ action: 'sleep' })); await Promise.resolve(); await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.state.scheduler.status).toBe('waiting');
     await vi.advanceTimersByTimeAsync(INPUT_COALESCE_MS);
     expect(texts).toEqual(['先睡觉', '还是去看书']);
     expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(1000);

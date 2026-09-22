@@ -33,7 +33,10 @@ test('late decisions cannot revive superseded input or overlap an occupied decis
   agent.receive('Go to bed'); const pending = agent.decide();
   agent.receive('Go to bookshelf instead'); f.clock.now += 2000;
   assert.equal(signals[0].aborted, true); assert.equal(await agent.decide(), false);
-  first.resolve(decision({ selection: move() })); assert.equal(await pending, false);
+  assert.equal(await pending, false); // Local cancellation finishes before an uncooperative provider settles.
+  assert.equal(agent.snapshot().decisionBusy, true);
+  first.resolve(decision({ selection: move() })); await flush();
+  assert.equal(agent.snapshot().decisionBusy, false);
   assert.equal(agent.actions.current, null);
   assert.equal(await agent.decide(), true); assert.equal(agent.snapshot().action?.call.target, 'bookshelf');
   agent.tick(0.5); assert.equal(f.state.position, -1); agent.dispose();

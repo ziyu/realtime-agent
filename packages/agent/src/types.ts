@@ -1,8 +1,12 @@
+import type { ChannelDefinition, ChannelDecisionContext, ChannelEvent } from './channels.js';
+import type { ObservationReference, ObservationSnapshot } from './observations.js';
+import type { TimingSample } from './telemetry.js';
+
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export interface Scope { epoch: string; turnId: string | null; revision: number }
 export interface ActionCall { capability: string; target?: string; input?: JsonValue }
 export type Selection = { kind: 'execute'; call: ActionCall } | { kind: 'continue' } | { kind: 'wait' };
-export interface Candidate { id: string; description: string; selection: Selection }
+export interface Candidate { id: string; description: string; selection: Selection; observations?: ObservationReference[] }
 export type ExecutionStatus = 'running' | 'held' | 'completed' | 'cancelled' | 'failed';
 export interface ActionReceipt {
   id: string;
@@ -49,11 +53,14 @@ export interface DecisionContext {
   proposal: ProposalRecord | null;
   thinking: boolean;
   slowThinkingAvailable: boolean;
+  channels?: Record<string, ChannelDecisionContext>;
+  observations?: ObservationSnapshot[];
 }
 export interface DecisionResult {
   selection: Selection;
   /** Independently selected output action; omission preserves the current output. */
   output?: Selection;
+  channels?: Record<string, Selection>;
   interrupt: boolean;
   think: boolean;
   acceptProposal: boolean;
@@ -73,6 +80,7 @@ export interface AgentEnvironment<C> {
   output?: { candidates(context: C): Candidate[]; capabilities: readonly Capability<C>[] };
   /** Semantic changes only, not every animation frame. */
   revision?(context: C): string | number;
+  channels?: readonly ChannelDefinition<C>[];
 }
 export interface ObservationEvidence {
   id: string; scope: Scope; observedAt: number; expiresAt: number; facts: JsonValue;
@@ -93,6 +101,8 @@ export interface AgentPolicies {
   verifyCompletion?(context: DecisionContext, decision: DecisionResult): boolean;
 }
 export type AgentEvent =
+  | { type: 'timing'; sample: TimingSample }
+  | ({ type: 'channel-progress' } & ChannelEvent)
   | { type: 'changed' | 'wake'; scope: Scope }
   | { type: 'decision-started'; context: DecisionContext; at: number }
   | { type: 'decision-resolved'; context: DecisionContext; result: DecisionResult; at: number }

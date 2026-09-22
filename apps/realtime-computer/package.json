@@ -1,0 +1,41 @@
+{
+  "name": "@realtime-agent/computer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @realtime-agent/agent build && tsx server/index.ts",
+    "dev:live": "pnpm --filter @realtime-agent/agent build && tsx server/index.ts --live",
+    "check:config": "tsx server/index.ts --check-config",
+    "cli": "node scripts/computer-cli.mjs",
+    "dev:manual": "pnpm --filter @realtime-agent/agent build && tsx server/index.ts --manual",
+    "dev:browser-demo": "pnpm --filter @realtime-agent/agent build && tsx server/index.ts --browser-demo",
+    "test:native": "pnpm --filter @realtime-agent/agent build && tsx --test --test-concurrency=1 tests/native/*.test.ts",
+    "test:live:task": "pnpm --filter @realtime-agent/agent build && tsx scripts/verify-cua-computer.ts",
+    "test:cua": "pnpm --filter @realtime-agent/agent build && tsx --test --test-concurrency=1 tests/cua-*.test.ts tests/startup.test.ts",
+    "test:legacy:live": "pnpm --filter @realtime-agent/agent build && tsx scripts/verify-desktop-task.ts",
+    "typecheck": "pnpm --filter @realtime-agent/agent build && tsc --noEmit",
+    "build": "pnpm run typecheck",
+    "test": "pnpm --filter @realtime-agent/agent build && tsx --test tests/*.test.ts",
+    "test:e2e": "pnpm --filter @realtime-agent/agent build && tsx --test tests/e2e/*.test.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "1.63.0",
+    "@realtime-agent/agent": "workspace:*",
+    "@realtime-agent/config": "workspace:*",
+    "@system-one-ai/sdk": "0.5.2",
+    "@trycua/cua-driver": "0.28.2",
+    "ajv": "8.17.1",
+    "express": "5.2.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

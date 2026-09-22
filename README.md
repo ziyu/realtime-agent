@@ -1,10 +1,12 @@
 # RealtimeAgent
 
-**独立 Agent 内核：**新架构见 [Agent 架构设计](docs/agent-architecture.md)，包位于 [packages/agent](packages/agent/README.md)。Home 已接入完整协调器，统一管理轮次、决策、慢思考与执行；人格和持久化通过宿主策略接入。原生行动/外观播报先由真实回执生成文本，再校验音频转写后播放，普通聊天获批后仍可流式输出。核心可以脱离 3D 页面运行，Jev 使用 `@system-one-ai/sdk@0.5.2`。
+**通用实时 Agent 运行时：**JEV 等 System One 模型选择当前行为，LLM 提供计划与语言提议，环境执行器确认实际结果。独立 [Agent 包](packages/agent/README.md) 已支持带时效的观察、异步设备回执、资源互斥、短任务计划和并行表现通道。Home 与 Computer 真实 Windows 桌面应用复用同一协调器；当前实现和验收边界见 [实施记录](docs/realtime-runtime-implementation.md)。
+
+**通用 Computer Use：**运行 `pnpm dev:computer:live` 后，通过 `pnpm computer run "自然语言目标" --wait` 或 `POST /api/v1/tasks` 调用；无需打开网页或预选窗口。CLI、HTTP 和可选网页控制台共享 Cua Driver、JEV 与 LLM 运行时，支持按任务 ID 查询、停止、继续和获取结果。接口、退出码及接入示例见 [Computer CLI / API](docs/computer-api.md)，底层实现与真实验收状态见 [Cua 接入记录](docs/cua-computer-use.md)。
 
 **Cloudflare 统一凭据入口：**根目录 `.env` 只需填写 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`，运行 `pnpm dev:cloudflare`。Jev、文字模型和 Grok 实时语音统一走 Cloudflare，本地音频房间自动启动，无需申请其他模型密钥。Token 权限、账户余额和验证范围见 [Cloudflare 启动说明](docs/cloudflare.md)。下面的原厂配置仍作为可选路径保留。
 
-实时 3D Agent 家园实验，以 **pnpm monorepo** 管理。Jev 负责即时行为选择并决定是否调用 LLM，语言模型提供对话、计划与记忆建议，服务端世界负责动作执行和结果验证。
+项目以 **pnpm monorepo** 管理。Home 保留实时 3D 家园、人格与生活记忆，并加入独立表情和视线。原生说话继续校验整段获准文本及音频转写后播放；表现通道可以在等待规划时继续运行。
 
 默认 Home 中的 Milo 有持续的性格、兴趣、心情和自己的小愿望。实际经历会影响兴趣与愿望进度；Jev 可以在没有用户指令时邀请 LLM 回顾生活，形成带来源的随记。打开“内心”面板可以查看，也可以关闭主动分享，让它安静生活。
 
@@ -34,8 +36,9 @@ realtime-agent/
 ├── pnpm-lock.yaml            # 全仓库唯一依赖锁文件
 ├── apps/
 │   ├── realtime-home/        # @realtime-agent/home
-│   └── realtime-demo/        # @realtime-agent/demo
-├── packages/agent/          # 独立协调器、执行回执、感知证据与输出许可
+│   ├── realtime-demo/        # @realtime-agent/demo，历史实现
+│   └── realtime-computer/    # @realtime-agent/computer，真实 Windows 桌面
+├── packages/agent/          # 协调、观察、通道、执行回执、任务与输出许可
 ├── packages/config/         # 服务端环境加载与模型端点配置
 └── docs/
 ```
@@ -44,19 +47,29 @@ realtime-agent/
 | --- | --- | --- | --- |
 | `@realtime-agent/home` | React + Three.js，四个房间、八种生活动作 | `pnpm dev` 或 `pnpm dev:home` | 5174，API 3102 |
 | `@realtime-agent/demo` | Three.js 原生页面，厨房、卧室、书房、花园与十二个交互对象 | `pnpm dev:demo` | 3007，页面与 API 共用 |
+| `@realtime-agent/computer` | Cua Driver + JEV + LLM，全桌面任务、跨窗口与结果核对 | `pnpm dev:computer` | 3110，页面与 API 共用 |
 
-两套应用保留各自的世界协议、运行时和数据目录，通过 `workspace:*` 共同使用 `@realtime-agent/config` 加载服务端配置。
+Home 与 Computer 复用 `@realtime-agent/agent`；旧 Demo 仍保留历史运行时。各应用使用 `workspace:*` 接入服务端配置包。Computer 的默认驱动连接当前 Windows 用户桌面，会话和任务记录保存在内存中。
 
 ## 根目录命令
 
 ```sh
 pnpm dev           # 启动 home
 pnpm dev:demo      # 启动 demo
-pnpm dev:all       # 同时启动两个应用
-pnpm typecheck     # 检查两个应用的 TypeScript
-pnpm build         # 构建两个应用，包含各自的类型检查
-pnpm test          # 顺序执行两个应用的现有自动化测试
-pnpm test:e2e      # 顺序执行两个应用的 Chrome 浏览器测试
+pnpm dev:computer # 连接真实 Windows 桌面，有配置时启用 JEV + LLM
+pnpm dev:computer:manual # 真实桌面观察和手动输入，不读取模型配置
+pnpm dev:computer:live # 要求 JEV + LLM 配置齐全后启动
+pnpm check:computer # 检查模型配置缺项和读取位置，不启动桌面或调用模型
+pnpm computer --help # 通用 Computer Use CLI（通过 HTTP 调用服务）
+pnpm computer run "自然语言目标" --wait # 不依赖网页的任务调用
+pnpm dev:all       # 同时启动三个参考应用
+pnpm typecheck     # 检查所有工作区包
+pnpm build         # 构建工作区包与应用
+pnpm test          # 顺序执行离线自动化测试
+pnpm test:computer # Cua 协议、模型适配、任务循环与控制台 HTTP 回归（模型/设备为夹具）
+pnpm test:computer:live # 可选记事本专项测试，不是通用 CLI/API 的调用前提
+pnpm test:computer:browser-fixture # 仅旧浏览器表单回归，不代表默认 Computer 能力
+pnpm test:e2e      # 顺序执行应用浏览器回归
 pnpm test:live     # 显式使用真实密钥验证 Home，会消耗模型额度
 pnpm start         # 从 home 的 3102 端口提供已构建页面与 API
 ```
@@ -75,7 +88,7 @@ CI 或复现安装使用 `pnpm install --frozen-lockfile`。依赖声明保留�
 
 ## 模型配置与数据
 
-两个应用都支持仓库根目录的 `.env`。首次配置时执行以下命令；已有 `.env` 时直接修改现有文件，不要覆盖密钥：
+各应用的真实模式支持仓库根目录的 `.env`；Computer 默认检查模型配置但只在提交任务后调用模型，显式 manual 模式不读取模型配置。首次配置时执行以下命令；已有 `.env` 时直接修改现有文件，不要覆盖密钥：
 
 ```sh
 cp .env.example .env
@@ -87,12 +100,18 @@ cp .env.example .env
 
 home 将性格、愿望、随记和记忆一起保存到 `apps/realtime-home/data/life-live.json` 或 `life-demo.json`。首次启动会从同目录旧 `memories-*.json` 迁入已有记忆，保留旧文件；后续只读取新的生活记录。重启或重置家园不会抹去人格和愿望进度。demo 仍使用自己的原有记忆格式。
 
-普通 `pnpm test`、`pnpm test:e2e` 使用响应夹具或显式演示模式，不调用真实模型。home E2E 独占 5174/3102，每轮使用独立的 `.test-data/` 子目录；demo 测试独占 3008。测试不复用 Home 的日常服务，运行前需停止同端口服务。
+普通 `pnpm test`、`pnpm test:e2e` 使用响应夹具或显式演示模式，不调用真实模型。Home E2E 默认使用 5174/3102，可通过 `E2E_PORT` 选择独立的构建后服务端口，每轮使用独立 `.test-data/` 子目录；Demo 测试使用 3008。Computer E2E 自动分配本地端口，用同一个浏览器完成场景并在结束后关闭。测试不复用已有日常服务。
 
 `pnpm test:live` 是单独的真实浏览器联调入口，强制真实模式、独占 5174/3102，不复用用户服务，记忆写入 `.live-test-data/`。其日志、HTTP 成功响应元数据和页面截图保存在 `apps/realtime-home/test-results/live-integration/`。该测试有请求数量和时间上限，不是长时间性能评测。
 
 ## 进一步阅读
 
+- [通用运行时：实现、使用与验收记录](docs/realtime-runtime-implementation.md)
+- [Cua Computer Use 与当前验收状态](docs/cua-computer-use.md)
+- [通用 Computer CLI / HTTP API](docs/computer-api.md)
+- [Computer 使用说明](apps/realtime-computer/README.md)
+- [通用实时 Agent：架构与实施路线](docs/general-realtime-agent-plan.md)
+- [实时 Agent 案例调研与来源](docs/realtime-agent-research.md)
 - [Home 功能与配置](apps/realtime-home/README.md)
 - [Demo 功能与配置](apps/realtime-demo/README.md)
 - [Home 行为运行时设计](apps/realtime-home/docs/architecture.md)

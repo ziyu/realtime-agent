@@ -10,6 +10,8 @@ import type { MindState } from '../shared/mind';
 import { acceptInsight, activeGoal, addEpisode, advanceMind, AUTONOMOUS_THOUGHT_INTERVAL_MS, boundedMemories, createMind, recall, recordOutcome, reflectionOpportunity } from './mind';
 import { speechCandidates, speechCapability } from './voice/output';
 import type { LifeSnapshot } from './life-store';
+import { presentationChannels, demoPresentation } from './presentation';
+import { initialPresentation } from '../shared/presentation';
 
 interface Options {
   fast: FastProvider; slow: SlowProvider | null; mode: Mode; provider?: 'direct' | 'cloudflare';
@@ -56,7 +58,7 @@ export class AgentRuntime {
     this.agent = new Agent({ thoughtIntervalMs: DECISION_INTERVAL_MS, epoch: this.state.epoch, now: this.now, id: randomUUID,
       environment: { context: () => this.state, observe: () => json(this.context()), perceive: () => json({ object: nearbyObservation(this.state.agent.position), room: observeTarget(this.state.agent.position, roomAt(this.state.agent.position)) }),
         candidates: () => homeCandidates(this.context()), capabilities: homeCapabilities,
-        output: { candidates: speechCandidates, capabilities: [speechCapability] }, revision: world => world.version },
+        output: { candidates: speechCandidates, capabilities: [speechCapability] }, channels: presentationChannels(this.now), revision: world => world.version },
       fast: { decide: (context, signal) => this.fastDecision(context, signal) },
       ...(options.slow ? { slow: { think: (context: CoreContext, signal: AbortSignal) => this.slowThought(context, signal) } } : {}),
       policies: { canThink: () => this.canThink(), acceptProposal: proposal => this.reviewProposal(proposal),
@@ -68,6 +70,7 @@ export class AgentRuntime {
     const mind = previousMind ? structuredClone(previousMind) : createMind(this.now());
     return {
       epoch: randomUUID(), version: 0, intentVersion: 0, elapsed: 0, paused: false, speed: 1, mode: this.options.mode,
+      presentation: initialPresentation(),
       connected: { jev: this.options.mode === 'live', llm: this.options.mode === 'live' && !!this.options.slow, jevModel: this.options.jevModel ?? 'jev-latest', llmModel: this.options.llmModel ?? '', provider: this.options.provider ?? 'direct' },
       agent: { name: 'Milo', position: { x: -2.5, z: 1.5 }, needs: { energy: 78, satiety: 64, hydration: 47, happiness: 82 }, action: null },
       intent: null, attending: false, nativeVoiceActive: false, turns: [], objects: { plantMoisture: 52, dishesClean: true },
@@ -110,6 +113,7 @@ export class AgentRuntime {
   private refreshScheduler() {
     const core = this.agent.snapshot(), s = this.state;
     s.execution = core.action; s.executions = core.receipts; s.speechExecution = core.output; s.speechExecutions = core.outputReceipts;
+    s.channels = core.channels; s.timings = this.agent.telemetry.snapshot().slice(-96);
     s.attending = core.attending; s.deciding = core.deciding; s.thinking = core.thinking;
     s.scheduler.lastRequestAt = core.lastDecisionAt;
     s.scheduler.nextTickAt = this.decisionTimer && !s.paused ? this.nextTickAt : null;
@@ -168,6 +172,7 @@ export class AgentRuntime {
     this.state.turns.push({ id: turn.id, text: turn.text, source, receivedAt: turn.receivedAt, previousAction,
       decisionStartedAt: null, decisionAt: null, appliedAt: null, appliedAction: null, appliedTarget: null, replyAt: null, supersededAt: null, replyCancelledAt: null, error: null });
     this.state.turns = this.state.turns.slice(-32); this.state.reflection = null; this.state.error = null;
+    this.agent.react('face', 'attentive'); this.agent.react('gaze', 'speaker');
     this.chat(trimmed, 'user', turn.id);
     addEpisode(this.state.mind, { id: turn.id, kind: 'conversation', role: 'user', text: trimmed, at: this.now(), epoch: this.state.epoch, requestId: turn.id });
     this.state.mind.drives.connection = clamp(this.state.mind.drives.connection - 12); this.persistLife();
@@ -184,7 +189,7 @@ export class AgentRuntime {
   holdNativeInput() {
     if (!this.state.nativeVoiceActive || this.state.paused) return;
     if (this.state.intent) this.state.intent.replySuppressed = true;
-    this.state.version++; this.agent.holdInput(); this.emit();
+    this.state.version++; this.agent.holdInput(); this.agent.react('face', 'attentive'); this.agent.react('gaze', 'speaker'); this.emit();
   }
   releaseNativeInput() { this.agent.releaseInput(); this.emit(); this.wakeInteraction(); }
   interruptReply(epoch: string, turnId: string): boolean {
@@ -269,13 +274,15 @@ export class AgentRuntime {
   }
   private async fastDecision(context: CoreContext, signal: AbortSignal): Promise<DecisionResult> {
     try {
-      const result = await this.options.fast.decide(homeContext(context), signal);
+      const result = await this.options.fast.decide({ ...homeContext(context), channels: context.channels }, signal);
       const selection = result.action === 'idle' ? { kind: 'wait' as const } : result.action === 'continue' ? { kind: 'continue' as const }
         : { kind: 'execute' as const, call: homeCall(result.action, result.target) };
       const output = result.speech === undefined ? undefined : context.outputCandidates?.find(c => c.id === result.speech)?.selection;
       if (result.speech !== undefined && !output) throw new AgentError('invalid_output_candidate', '说话候选不可用，未执行发言。');
       return { selection, ...(output ? { output } : {}), interrupt: result.interrupt >= 0.7, think: result.think >= 0.7, acceptProposal: result.acceptReflection >= 0.5,
-        complete: result.requestComplete >= 0.8, metadata: json(result) };
+        complete: result.requestComplete >= 0.8, metadata: json(result),
+        ...(result.channels ? { channels: result.channels } : this.options.mode === 'demo' && result.source === 'demo'
+          ? { channels: demoPresentation(this.state, result, context.channels ?? {}) } : {}) };
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       throw error instanceof ProviderError ? new AgentError('home_provider', error.message, error.retryAfterMs)
@@ -390,6 +397,7 @@ export class AgentRuntime {
         this.emit(); break;
       }
       case 'thought-started': {
+        this.agent.react('face', 'thinking');
         const automatic = !this.state.intent || this.state.intent.completed;
         if (automatic) { this.state.mind.lastAutonomousAttemptAt = event.at; this.persistLife(); }
         if (this.state.mode === 'live') this.state.metrics.llmCalls++;
@@ -420,7 +428,7 @@ export class AgentRuntime {
         }
         break;
       case 'settled': if (this.urgentDecision) this.wakeInteraction(); break;
-      case 'changed': this.emit(); break;
+      case 'changed': this.emit(); if (this.urgentDecision) this.wakeInteraction(); break;
       case 'wake': break;
     }
   }

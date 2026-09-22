@@ -64,7 +64,9 @@ describe('one-second decision cadence and action commitment', () => {
     expect(signals[0].aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(2500);
     expect(fast.decide).toHaveBeenCalledTimes(1);
-    resolve(answer()); await Promise.resolve(); await Promise.resolve();
+    expect(runtime.state.scheduler.status).toBe('deciding');
+    resolve(answer()); await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.state.scheduler.status).toBe('waiting');
     expect(runtime.state.agent.action).toBeNull();
     expect(runtime.state.metrics.discarded).toBe(1);
     await vi.advanceTimersByTimeAsync(INPUT_COALESCE_MS - 1);
@@ -109,7 +111,7 @@ describe('one-second decision cadence and action commitment', () => {
     await vi.advanceTimersByTimeAsync(3500);
     expect(fast.decide).toHaveBeenCalledTimes(1); expect(slow.reflect).toHaveBeenCalledTimes(1);
     resolve({ summary: '先休息', reply: '可以先休息。', suggestedActions: [], memories: [] });
-    await Promise.resolve(); await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(runtime.state.reflection?.accepted).toBe(false);
     await vi.advanceTimersByTimeAsync(500);
     expect(fast.decide).toHaveBeenCalledTimes(2);
